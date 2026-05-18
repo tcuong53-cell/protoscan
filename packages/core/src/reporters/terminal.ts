@@ -39,17 +39,25 @@ export function formatTerminal(result: ScanResult): string {
     return lines.join('\n');
   }
 
-  // Group by severity
+  // Group by severity, split by confidence
   const grouped = groupBySeverity(result.issues);
 
   for (const severity of ['critical', 'high', 'medium', 'low'] as const) {
     const issues = grouped[severity];
     if (!issues?.length) continue;
 
+    const realIssues = issues.filter((i) => i.confidence !== 'low');
+    const noiseIssues = issues.filter((i) => i.confidence === 'low');
+
     lines.push(severityColor[severity](`  ${severity.toUpperCase()} (${issues.length})`));
-    for (const issue of issues) {
+
+    for (const issue of realIssues) {
       lines.push(`    ${severityIcon[severity]} ${colors.bold(issue.category)} — ${issue.screenName || '(file-level)'}`);
       lines.push(`      ${issue.message}`);
+    }
+
+    if (noiseIssues.length > 0) {
+      lines.push(colors.dim(`    … ${noiseIssues.length} low-confidence issue${noiseIssues.length > 1 ? 's' : ''} (possible false positives — use --format html to review)`));
     }
     lines.push('');
   }
@@ -62,7 +70,12 @@ export function formatTerminal(result: ScanResult): string {
   if (summary.bySeverity.medium) parts.push(colors.blue(`${summary.bySeverity.medium} medium`));
   if (summary.bySeverity.low) parts.push(colors.gray(`${summary.bySeverity.low} low`));
 
-  lines.push(colors.bold(`  Found ${summary.total} issues (${parts.join(', ')})`));
+  const noisePart = summary.total - summary.likelyReal;
+  const likelyRealSuffix = noisePart > 0
+    ? colors.dim(` · ${summary.likelyReal} likely real, ${noisePart} low-confidence`)
+    : '';
+
+  lines.push(colors.bold(`  Found ${summary.total} issues (${parts.join(', ')})`) + likelyRealSuffix);
 
   if (result.skippedChecks.length > 0) {
     lines.push(colors.dim(`  Skipped checks: ${result.skippedChecks.join(', ')}`));

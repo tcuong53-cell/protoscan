@@ -42,6 +42,7 @@ export const overlayTrapAnalyzer = {
           id: `overlay-trap-${++counter}`,
           category: 'overlay-trap',
           severity: 'critical',
+          confidence: 'certain',
           screenId: destId,
           screenName: node.name,
           message: `Overlay "${node.name}" has no CLOSE or BACK action — users will be trapped.`,

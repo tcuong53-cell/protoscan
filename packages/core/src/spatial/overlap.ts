@@ -1,4 +1,5 @@
 import type { AnalyzerOptions, BoundingBox, FigmaFile, FigmaNode, Issue } from '../types.js';
+import { isNonPrototypeFrame } from '../utils/filters.js';
 
 let counter = 0;
 
@@ -11,7 +12,10 @@ export const overlapAnalyzer = {
 
     for (const page of file.document.children ?? []) {
       for (const frame of page.children ?? []) {
-        if (frame.type === 'FRAME' || frame.type === 'COMPONENT' || frame.type === 'COMPONENT_SET') {
+        if (
+          (frame.type === 'FRAME' || frame.type === 'COMPONENT' || frame.type === 'COMPONENT_SET') &&
+          !isNonPrototypeFrame(frame.name)
+        ) {
           checkOverlaps(frame, frame.id, frame.name, issues);
         }
       }
@@ -49,6 +53,7 @@ function checkOverlaps(
           id: `overlap-${++counter}`,
           category: 'overlap',
           severity: 'medium',
+          confidence: 'certain',
           screenId,
           screenName,
           message: `"${interactive[i].name}" and "${interactive[j].name}" overlap (${Math.round(area)}px² intersection).`,

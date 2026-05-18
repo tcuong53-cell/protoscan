@@ -2,9 +2,7 @@ import type { Issue, ScanResult } from '../types.js';
 
 export function formatHtml(result: ScanResult): string {
   const { file, summary, issues, duration, skippedChecks } = result;
-  const grouped = groupBySeverity(issues);
-  const categoryData = JSON.stringify(summary.byCategory);
-  const severityData = JSON.stringify(summary.bySeverity);
+  const noise = summary.total - summary.likelyReal;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -28,6 +26,8 @@ export function formatHtml(result: ScanResult): string {
   .header h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
   .header h1 span { color: var(--accent); }
   .header .meta { color: var(--muted); font-size: 14px; }
+  .header .meta .likely-real { color: var(--green); font-weight: 600; }
+  .header .meta .noise-count { color: var(--muted); }
 
   /* Summary Cards */
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 32px; }
@@ -39,7 +39,7 @@ export function formatHtml(result: ScanResult): string {
   .card.medium .value { color: var(--medium); }
   .card.low .value { color: var(--low); }
   .card.screens .value { color: var(--accent); }
-  .card.clean .value { color: var(--green); }
+  .card.real .value { color: var(--green); }
   .card.time .value { color: var(--muted); font-size: 24px; }
 
   /* Charts */
@@ -59,11 +59,13 @@ export function formatHtml(result: ScanResult): string {
   .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
   .filter-btn { background: var(--surface); border: 1px solid var(--border); color: var(--muted); padding: 6px 14px; border-radius: 20px; font-size: 13px; cursor: pointer; transition: all 0.15s; }
   .filter-btn:hover, .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .filter-btn.confident.active { background: var(--green); border-color: var(--green); }
 
   /* Issues */
   .issues-header { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
   .issue { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 8px; display: flex; gap: 12px; align-items: flex-start; transition: opacity 0.2s; }
   .issue.hidden { display: none; }
+  .issue[data-confidence="low"] { opacity: 0.5; }
   .severity-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
   .severity-dot.critical { background: var(--critical); box-shadow: 0 0 8px var(--critical); }
   .severity-dot.high { background: var(--high); }
@@ -72,8 +74,11 @@ export function formatHtml(result: ScanResult): string {
   .issue-body { flex: 1; }
   .issue-title { font-weight: 600; font-size: 14px; }
   .issue-screen { color: var(--muted); font-size: 13px; margin-top: 2px; }
-  .issue-category { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--muted); margin-top: 6px; }
-  .issue-link { display: inline-block; background: var(--accent); color: #fff; border-radius: 6px; padding: 2px 10px; font-size: 11px; text-decoration: none; margin-top: 6px; margin-left: 4px; }
+  .issue-section { color: var(--muted); font-size: 12px; margin-top: 1px; opacity: 0.7; }
+  .issue-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .issue-category { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--muted); }
+  .issue-noise-badge { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--muted); font-style: italic; }
+  .issue-link { display: inline-block; background: var(--accent); color: #fff; border-radius: 6px; padding: 2px 10px; font-size: 11px; text-decoration: none; }
   .issue-link:hover { opacity: 0.8; }
 
   /* Footer */
@@ -99,17 +104,20 @@ export function formatHtml(result: ScanResult): string {
   <div class="header">
     <h1><span>ProtoScan</span> — ${esc(file.name)}</h1>
     <div class="meta">
-      ${summary.screens.total} screens · ${summary.total} issues · ${duration}ms · ${new Date(result.timestamp).toLocaleDateString()}
+      ${summary.screens.total} screens ·
+      <span class="likely-real">${summary.likelyReal} likely real</span>
+      ${noise > 0 ? `· <span class="noise-count">${noise} low-confidence</span>` : ''}
+      · ${summary.total} total · ${duration}ms · ${new Date(result.timestamp).toLocaleDateString()}
       ${skippedChecks.length ? ` · Skipped: ${skippedChecks.join(', ')}` : ''}
     </div>
   </div>
 
   <div class="cards">
     <div class="card screens"><div class="value">${summary.screens.total}</div><div class="label">Screens</div></div>
+    <div class="card real"><div class="value">${summary.likelyReal}</div><div class="label">Likely Real</div></div>
     <div class="card critical"><div class="value">${summary.bySeverity.critical}</div><div class="label">Critical</div></div>
     <div class="card high"><div class="value">${summary.bySeverity.high}</div><div class="label">High</div></div>
     <div class="card medium"><div class="value">${summary.bySeverity.medium}</div><div class="label">Medium</div></div>
-    <div class="card low"><div class="value">${summary.bySeverity.low}</div><div class="label">Low</div></div>
     <div class="card time"><div class="value">${duration}ms</div><div class="label">Scan Time</div></div>
   </div>
 
@@ -126,6 +134,7 @@ export function formatHtml(result: ScanResult): string {
 
   <div class="filters">
     <button class="filter-btn active" data-filter="all">All (${summary.total})</button>
+    <button class="filter-btn confident" data-filter="confident">Likely Real (${summary.likelyReal})</button>
     ${summary.bySeverity.critical ? `<button class="filter-btn" data-filter="critical">Critical (${summary.bySeverity.critical})</button>` : ''}
     ${summary.bySeverity.high ? `<button class="filter-btn" data-filter="high">High (${summary.bySeverity.high})</button>` : ''}
     ${summary.bySeverity.medium ? `<button class="filter-btn" data-filter="medium">Medium (${summary.bySeverity.medium})</button>` : ''}
@@ -142,20 +151,27 @@ export function formatHtml(result: ScanResult): string {
     <b style="color:var(--high);">touch-target</b> — Interactive element is smaller than ${result.issues.find(i=>i.category==='touch-target')?.evidence?.minSize ?? 44}px minimum.<br>
     <b style="color:var(--medium);">overlap</b> — Two interactive elements overlap, causing wrong taps.<br>
     <b style="color:var(--medium);">scroll</b> — Content extends beyond frame but scroll is not enabled.<br>
-    <b style="color:var(--medium);">incomplete-connection</b> — Interaction exists but has no destination set (prototyping not finished).
+    <b style="color:var(--medium);">incomplete-connection</b> — Interaction exists but has no destination set (prototyping not finished).<br>
+    <b style="color:var(--critical);">runtime-nav-failure</b> — Click was simulated in headless Playwright and navigation did not occur or went to the wrong screen. Detected only by E2E simulation — not visible in static analysis.<br>
+    <b style="color:var(--medium);">vision</b> — AI vision analysis (GPT-4o) detected a visual UX issue: contrast, clarity, empty state, or information overload. Confidence is <em>probable</em> — review each finding.<br>
+    <span style="opacity:0.6;">Dimmed issues have low confidence — they may be design system frames, annotation screens, or tab-bar roots where missing back-nav is expected.</span>
   </div>
   <div id="issues">
     ${issues.map((issue) => {
       const nodeId = (issue.nodeId || issue.screenId || '').replace(':', '-');
       const figmaUrl = nodeId ? `https://www.figma.com/design/${file.key}/?node-id=${nodeId}` : '';
+      const isLowConfidence = issue.confidence === 'low';
       return `
-    <div class="issue" data-severity="${issue.severity}" data-category="${issue.category}">
+    <div class="issue" data-severity="${issue.severity}" data-category="${issue.category}" data-confidence="${issue.confidence}">
       <div class="severity-dot ${issue.severity}"></div>
       <div class="issue-body">
         <div class="issue-title">${esc(issue.message)}</div>
         <div class="issue-screen">${esc(issue.screenName || '(file-level)')}</div>
-        <span class="issue-category">${issue.category}</span>
-        ${figmaUrl ? `<a class="issue-link" href="${figmaUrl}" target="_blank" rel="noopener">Open in Figma ↗</a>` : ''}
+        <div class="issue-tags">
+          <span class="issue-category">${issue.category}</span>
+          ${isLowConfidence ? `<span class="issue-noise-badge">possible false positive</span>` : ''}
+          ${figmaUrl ? `<a class="issue-link" href="${figmaUrl}" target="_blank" rel="noopener">Open in Figma ↗</a>` : ''}
+        </div>
       </div>
     </div>`;
     }).join('\n')}
@@ -173,7 +189,13 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
     btn.classList.add('active');
     const filter = btn.dataset.filter;
     document.querySelectorAll('.issue').forEach(el => {
-      el.classList.toggle('hidden', filter !== 'all' && el.dataset.severity !== filter);
+      if (filter === 'all') {
+        el.classList.remove('hidden');
+      } else if (filter === 'confident') {
+        el.classList.toggle('hidden', el.dataset.confidence === 'low');
+      } else {
+        el.classList.toggle('hidden', el.dataset.severity !== filter);
+      }
     });
   });
 });
@@ -186,17 +208,10 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function groupBySeverity(issues: Issue[]): Record<string, Issue[]> {
-  const groups: Record<string, Issue[]> = {};
-  for (const issue of issues) {
-    (groups[issue.severity] ??= []).push(issue);
-  }
-  return groups;
-}
-
 function renderBars(data: Record<string, number>, total: number): string {
   const colors: Record<string, string> = {
     'dead-end': 'critical', 'overlay-trap': 'critical', 'orphan': 'high',
+    'runtime-nav-failure': 'critical',
     'back-nav': 'high', 'touch-target': 'high', 'incomplete-connection': 'medium',
     'overlap': 'medium', 'scroll': 'medium', 'vision': 'medium',
   };

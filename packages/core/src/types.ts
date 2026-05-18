@@ -10,8 +10,11 @@ export interface Issue {
     | 'scroll'
     | 'overlay-trap'
     | 'incomplete-connection'
+    | 'runtime-nav-failure'
     | 'vision';
   severity: 'critical' | 'high' | 'medium' | 'low';
+  /** How confident we are this is a real issue vs. a false positive */
+  confidence: 'certain' | 'probable' | 'low';
   screenId: string;
   screenName: string;
   nodeId?: string;
@@ -32,6 +35,8 @@ export interface AnalyzerOptions {
   pageIds?: string[];
   /** Skip specific checks */
   skip?: string[];
+  /** Screen name glob patterns to suppress (e.g. ["[DS]*", "Annotation*"]) */
+  ignorePatterns?: string[];
 }
 
 /** Simplified Figma file structure with prototype data */
@@ -97,6 +102,9 @@ export interface GraphNode {
   id: string;
   name: string;
   pageId: string;
+  /** Section this screen belongs to (if any) */
+  sectionId?: string;
+  sectionName?: string;
   type: string;
   hasInteractions: boolean;
   hasBackAction: boolean;
@@ -105,6 +113,10 @@ export interface GraphNode {
   nullDestinationCount: number;
   /** Whether screen name suggests it's archived/deprecated */
   isArchived: boolean;
+  /** Whether this screen is a Figma prototype flow starting point */
+  isFlowStartingPoint: boolean;
+  /** Whether this screen is a tab-bar root (BottomNav child detected) */
+  isTabRoot: boolean;
   boundingBox?: BoundingBox;
 }
 
@@ -115,6 +127,8 @@ export interface GraphEdge {
   navigation: string;
   trigger: string;
   actionType: string;
+  /** Bounding box of the interactive element that triggers this edge (for canvas click simulation) */
+  sourceElementBoundingBox?: BoundingBox;
 }
 
 export interface ScanResult {
@@ -129,6 +143,8 @@ export interface ScanResult {
 
 export interface ScanStats {
   total: number;
+  /** Issues with confidence 'certain' or 'probable' */
+  likelyReal: number;
   bySeverity: Record<Issue['severity'], number>;
   byCategory: Record<Issue['category'], number>;
   screens: { total: number; withIssues: number };

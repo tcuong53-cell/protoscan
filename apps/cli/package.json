@@ -7,7 +7,7 @@
     "protoscan": "dist/index.js"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm",
+    "build": "tsup src/index.ts --format esm --external @protoscan/simulator --external playwright --external @protoscan/vision --external openai",
     "dev": "tsx src/index.ts",
     "clean": "rm -rf dist"
   },

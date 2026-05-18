@@ -1,4 +1,5 @@
 import type { AnalyzerOptions, FigmaFile, FigmaNode, Issue } from '../types.js';
+import { isNonPrototypeFrame } from '../utils/filters.js';
 
 let counter = 0;
 
@@ -11,7 +12,10 @@ export const scrollAnalyzer = {
 
     for (const page of file.document.children ?? []) {
       for (const frame of page.children ?? []) {
-        if (frame.type === 'FRAME' || frame.type === 'COMPONENT' || frame.type === 'COMPONENT_SET') {
+        if (
+          (frame.type === 'FRAME' || frame.type === 'COMPONENT' || frame.type === 'COMPONENT_SET') &&
+          !isNonPrototypeFrame(frame.name)
+        ) {
           checkScroll(frame, frame.id, frame.name, issues);
         }
       }
@@ -48,6 +52,7 @@ function checkScroll(
           id: `scroll-${++counter}`,
           category: 'scroll',
           severity: 'medium',
+          confidence: 'certain',
           screenId,
           screenName,
           message: `"${node.name}" has content extending beyond frame bounds but scroll is not enabled.`,

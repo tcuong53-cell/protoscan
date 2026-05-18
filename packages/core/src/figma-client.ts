@@ -15,16 +15,19 @@ export class FigmaClient {
     if (!/^[a-zA-Z0-9]+$/.test(fileKey)) {
       throw new FigmaApiError(400, 'Invalid file key. Figma file keys are alphanumeric.');
     }
-    const data = await this.request(`/v1/files/${fileKey}?geometry=paths`);
+    const data = await this.request(`/v1/files/${fileKey}`);
     return data as FigmaFile;
   }
 
   private async request(path: string): Promise<unknown> {
     await this.throttle();
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000);
     const response = await fetch(`${FIGMA_API_BASE}${path}`, {
       headers: { 'X-Figma-Token': this.token },
-    });
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
 
     if (!response.ok) {
       const message = await this.parseError(response);

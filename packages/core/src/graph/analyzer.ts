@@ -1,5 +1,6 @@
 import type { AnalyzerOptions, FigmaFile, Issue, PrototypeGraph } from '../types.js';
 import { buildGraph } from './builder.js';
+import { STATE_VARIANT_PATTERN } from '../utils/filters.js';
 
 let issueCounter = 0;
 function nextId(category: string): string {
@@ -48,6 +49,7 @@ function detectDeadEnds(graph: PrototypeGraph): Issue[] {
       id: nextId('dead-end'),
       category: 'dead-end',
       severity: 'critical',
+      confidence: 'certain',
       screenId: nodeId,
       screenName: node.name,
       message: `Screen "${node.name}" has no outgoing interactions — users will get stuck here.`,
@@ -64,12 +66,12 @@ function detectOrphans(graph: PrototypeGraph): Issue[] {
 
   if (graph.startingPoints.length === 0) {
     // No flow starting points — can't determine orphans reliably
-    // Return a warning-level issue instead
     if (graph.nodes.size > 0) {
       issues.push({
         id: nextId('orphan'),
         category: 'orphan',
         severity: 'medium',
+        confidence: 'probable',
         screenId: '',
         screenName: '',
         message: 'No flow starting points defined — orphan detection may be incomplete. Add starting points in Figma prototype settings.',
@@ -102,13 +104,22 @@ function detectOrphans(graph: PrototypeGraph): Issue[] {
     }
   }
 
-  // Flag unreachable screens (archived screens get downgraded to low)
+  // Flag unreachable screens
   for (const [nodeId, node] of graph.nodes) {
     if (!reachable.has(nodeId)) {
+      // Archived screens: low severity + low confidence
+      // Screens with no interactions at all: probably DS leftovers → low confidence
+      // State variant screens (error/skeleton/loading/platform): probably documentation → low confidence
+      const isLikelyDS = !node.hasInteractions && !node.isArchived;
+      const isStateVariant = STATE_VARIANT_PATTERN.test(node.name);
+      const severity = node.isArchived ? 'low' : 'high';
+      const confidence = node.isArchived || isLikelyDS || isStateVariant ? 'low' : 'certain';
+
       issues.push({
         id: nextId('orphan'),
         category: 'orphan',
-        severity: node.isArchived ? 'low' : 'high',
+        severity,
+        confidence,
         screenId: nodeId,
         screenName: node.name,
         message: node.isArchived
@@ -118,6 +129,7 @@ function detectOrphans(graph: PrototypeGraph): Issue[] {
           reachableScreens: reachable.size,
           totalScreens: graph.nodes.size,
           isArchived: node.isArchived,
+          hasInteractions: node.hasInteractions,
         },
       });
     }
@@ -130,7 +142,7 @@ function detectOrphans(graph: PrototypeGraph): Issue[] {
 function detectMissingBackNav(graph: PrototypeGraph): Issue[] {
   const issues: Issue[] = [];
 
-  // Collect all destination screens via NAVIGATE action
+  // Collect all destination screens via NAVIGATE action, tracking inDegree
   const navigateDestinations = new Map<string, string[]>(); // destId → [sourceIds]
 
   for (const [sourceId, edges] of graph.edges) {
@@ -147,12 +159,17 @@ function detectMissingBackNav(graph: PrototypeGraph): Issue[] {
   const startingDestinations = new Set(graph.startingPoints.map((sp) => sp.nodeId));
 
   for (const [destId, sourceIds] of navigateDestinations) {
+    // Skip designated flow starting points
     if (startingDestinations.has(destId)) continue;
 
     const destNode = graph.nodes.get(destId);
     if (!destNode) continue;
 
-    // Check if this screen has a BACK or CLOSE action (tracked on GraphNode, not edges)
+    // Skip screens that are themselves flow starting points (e.g. first onboarding slide
+    // navigated to from a previous session or another flow)
+    if (destNode.isFlowStartingPoint) continue;
+
+    // Check if this screen has a BACK or CLOSE action
     const hasBack = destNode.hasBackAction || destNode.hasCloseAction;
 
     // Check if there's a direct edge back to any source
@@ -160,10 +177,15 @@ function detectMissingBackNav(graph: PrototypeGraph): Issue[] {
     const hasDirectReturn = outgoing.some((e) => sourceIds.includes(e.destinationId));
 
     if (!hasBack && !hasDirectReturn) {
+      // Tab-bar roots and high-inDegree hub screens: downgrade to low confidence
+      const isHubScreen = sourceIds.length > 3;
+      const confidence = destNode.isTabRoot || isHubScreen ? 'low' : 'probable';
+
       issues.push({
         id: nextId('back-nav'),
         category: 'back-nav',
         severity: 'medium',
+        confidence,
         screenId: destId,
         screenName: destNode.name,
         message: `Screen "${destNode.name}" has no back navigation to return to the previous screen.`,
@@ -171,6 +193,8 @@ function detectMissingBackNav(graph: PrototypeGraph): Issue[] {
           navigatedFrom: sourceIds.map((id) => graph.nodes.get(id)?.name ?? id),
           hasBackAction: false,
           hasDirectReturn: false,
+          isTabRoot: destNode.isTabRoot,
+          inDegree: sourceIds.length,
         },
       });
     }
@@ -189,6 +213,7 @@ function detectIncompleteConnections(graph: PrototypeGraph): Issue[] {
         id: nextId('incomplete-connection'),
         category: 'incomplete-connection',
         severity: node.isArchived ? 'low' : 'medium',
+        confidence: node.isArchived ? 'low' : 'certain',
         screenId: nodeId,
         screenName: node.name,
         message: `Screen "${node.name}" has ${node.nullDestinationCount} interaction(s) with no destination — prototyping is incomplete.`,

@@ -1,4 +1,5 @@
 import type { AnalyzerOptions, FigmaFile, FigmaNode, Issue } from '../types.js';
+import { isNonPrototypeFrame } from '../utils/filters.js';
 
 let counter = 0;
 
@@ -14,7 +15,10 @@ export const touchTargetAnalyzer = {
 
     for (const page of file.document.children ?? []) {
       for (const frame of page.children ?? []) {
-        if (frame.type === 'FRAME' || frame.type === 'COMPONENT' || frame.type === 'COMPONENT_SET') {
+        if (
+          (frame.type === 'FRAME' || frame.type === 'COMPONENT' || frame.type === 'COMPONENT_SET') &&
+          !isNonPrototypeFrame(frame.name)
+        ) {
           walkForTouchTargets(frame, frame.id, frame.name, minSize, issues);
         }
       }
@@ -38,6 +42,7 @@ function walkForTouchTargets(
         id: `touch-target-${++counter}`,
         category: 'touch-target',
         severity: 'high',
+        confidence: 'certain',
         screenId,
         screenName,
         nodeId: node.id,

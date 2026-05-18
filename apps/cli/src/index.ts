@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { program } from 'commander';
-import { FigmaClient, FigmaApiError, scan, formatJson, formatTerminal, formatHtml } from '@protoscan/core';
+import { FigmaClient, FigmaApiError, scan, formatJson, formatTerminal, formatHtml, buildGraph, type Issue } from '@protoscan/core';
 import { writeFileSync } from 'node:fs';
 
 program
@@ -18,6 +18,9 @@ program
   .option('--min-touch-target <px>', 'Minimum touch target size in px', '44')
   .option('--skip <checks>', 'Comma-separated list of checks to skip')
   .option('--pages <ids>', 'Comma-separated page IDs to scan (default: all)')
+  .option('--simulate', 'Run headless Playwright simulator to detect runtime nav failures (slow, requires Playwright)')
+  .option('--vision', 'Run AI vision analysis on each screen with GPT-4o (requires OPENAI_API_KEY)')
+  .option('--max-vision-cost <usd>', 'Maximum USD to spend on vision analysis', '5')
   .action(async (input: string, options) => {
     // Parse Figma URL or raw file key
     const { fileKey, pageIds: urlPageIds } = parseFigmaInput(input);
@@ -57,11 +60,41 @@ program
       }
 
       console.error('Analyzing...');
+      const graph = buildGraph(file, { pageIds: pageIds.length ? pageIds : undefined });
+
+      let simulatorIssues: Awaited<ReturnType<typeof import('@protoscan/simulator').walkPrototype>> = [];
+      if (options.simulate) {
+        console.error('Running simulator (this may take several minutes)...');
+        const { walkPrototype } = await import('@protoscan/simulator');
+        simulatorIssues = await walkPrototype(graph, { fileKey });
+        console.error(`Simulator: ${simulatorIssues.length} runtime issue(s) found.`);
+      }
+
+      let visionIssues: Issue[] = [];
+      if (options.vision) {
+        const openaiKey = process.env.OPENAI_API_KEY;
+        if (!openaiKey) {
+          console.error('Error: --vision requires OPENAI_API_KEY env var.');
+          process.exit(1);
+        }
+        console.error('Running AI vision analysis (this may take a few minutes)...');
+        const { analyzeVision } = await import('@protoscan/vision');
+        visionIssues = await analyzeVision(graph, {
+          figmaToken: token,
+          openaiApiKey: openaiKey,
+          fileKey,
+          maxCost: parseFloat(options.maxVisionCost),
+          maxScreens: 200,
+        });
+        console.error(`Vision: ${visionIssues.length} issue(s) found.`);
+      }
+
       const result = await scan(file, {
         fileKey,
         minTouchTarget,
         skip: options.skip?.split(',').map((s: string) => s.trim()),
         pageIds: pageIds.length ? pageIds : undefined,
+        additionalIssues: [...simulatorIssues, ...visionIssues],
       });
 
       const formatters: Record<string, (r: typeof result) => string> = {

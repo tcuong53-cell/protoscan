@@ -1,0 +1,32 @@
+{
+  "name": "@protoscan/simulator",
+  "version": "0.0.1",
+  "description": "Headless Playwright prototype walker for ProtoScan",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "test": "vitest run",
+    "poc": "tsx src/poc.ts",
+    "poc:capture": "tsx src/poc.ts --capture",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@protoscan/core": "*",
+    "playwright": "^1.52.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "tsx": "^4.22.1",
+    "typescript": "^6.0.3",
+    "vitest": "*"
+  }
+}

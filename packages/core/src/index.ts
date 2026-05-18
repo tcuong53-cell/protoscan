@@ -1,4 +1,4 @@
-export { type Issue, type Analyzer, type AnalyzerOptions, type FigmaFile, type FigmaNode, type PrototypeGraph, type ScanResult, type ScanStats } from './types.js';
+export { type Issue, type Analyzer, type AnalyzerOptions, type FigmaFile, type FigmaNode, type PrototypeGraph, type ScanResult, type ScanStats, type BoundingBox, type GraphEdge } from './types.js';
 export { FigmaClient, FigmaApiError } from './figma-client.js';
 export { buildGraph } from './graph/builder.js';
 export { graphAnalyzer } from './graph/analyzer.js';

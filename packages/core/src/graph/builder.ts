@@ -7,14 +7,13 @@ import type {
   InteractionAction,
   PrototypeGraph,
 } from '../types.js';
+import { isNonPrototypeFrame, TAB_ROOT_CHILD_PATTERN } from '../utils/filters.js';
 
 /**
  * Build a directed graph from Figma file interactions.
  * Single-pass: walks the document tree, collects screens as nodes,
  * and creates edges from prototype interactions in O(N).
  */
-/** Patterns that indicate a page or section is NOT a prototype (design system, archive, etc.) */
-const NON_PROTOTYPE_PATTERN = /\b(foundation|component|archive|roadmap|changelog|token|icon|asset|styleguide|style.guide|template|gradient|ds.overview)\b/i;
 
 export interface BuildGraphOptions {
   /** Only scan these page IDs (default: auto-detect prototype pages) */
@@ -34,7 +33,13 @@ export function buildGraph(file: FigmaFile, options?: BuildGraphOptions): Protot
       startingPoints.push(...page.flowStartingPoints);
     }
 
-    collectScreens(page, page.id, nodes, edges);
+    collectScreens(page, page.id, undefined, undefined, nodes, edges);
+  }
+
+  // Mark flow starting points and tab-bar roots on collected nodes
+  for (const sp of startingPoints) {
+    const node = nodes.get(sp.nodeId);
+    if (node) node.isFlowStartingPoint = true;
   }
 
   return { nodes, edges, startingPoints };
@@ -48,9 +53,9 @@ function filterPages(pages: FigmaNode[], pageIds?: string[]): FigmaNode[] {
   }
 
   // Auto-detect: if any page looks like a design/prototype page, skip non-prototype pages
-  const hasPrototypePage = pages.some((p) => !NON_PROTOTYPE_PATTERN.test(p.name));
+  const hasPrototypePage = pages.some((p) => !isNonPrototypeFrame(p.name));
   if (hasPrototypePage && pages.length > 1) {
-    const filtered = pages.filter((p) => !NON_PROTOTYPE_PATTERN.test(p.name));
+    const filtered = pages.filter((p) => !isNonPrototypeFrame(p.name));
     if (filtered.length > 0) return filtered;
   }
 
@@ -62,29 +67,50 @@ function filterPages(pages: FigmaNode[], pageIds?: string[]): FigmaNode[] {
 function collectScreens(
   parent: FigmaNode,
   pageId: string,
+  sectionId: string | undefined,
+  sectionName: string | undefined,
   nodes: Map<string, GraphNode>,
   edges: Map<string, GraphEdge[]>,
 ): void {
   for (const child of parent.children ?? []) {
     if (child.type === 'SECTION') {
-      collectScreens(child, pageId, nodes, edges);
+      // Skip sections that look like DS/annotation/inspection areas
+      if (isNonPrototypeFrame(child.name)) continue;
+      collectScreens(child, pageId, child.id, child.name, nodes, edges);
     } else if (child.type === 'FRAME' || child.type === 'COMPONENT' || child.type === 'COMPONENT_SET') {
+      // Skip frames whose names match non-prototype patterns
+      if (isNonPrototypeFrame(child.name)) continue;
+
       const ARCHIVED_PATTERN = /\b(archived?|deprecated|old|legacy)\b/i;
+      const isTabRoot = detectTabRoot(child);
+
       nodes.set(child.id, {
         id: child.id,
         name: child.name,
         pageId,
+        sectionId,
+        sectionName,
         type: child.type,
         hasInteractions: false,
         hasBackAction: false,
         hasCloseAction: false,
         nullDestinationCount: 0,
         isArchived: ARCHIVED_PATTERN.test(child.name),
+        isFlowStartingPoint: false,
+        isTabRoot,
         boundingBox: child.absoluteBoundingBox,
       });
       collectInteractions(child, child.id, nodes, edges);
     }
   }
+}
+
+/** Detect if a frame is a tab-bar root by checking direct children for BottomNav component */
+function detectTabRoot(frame: FigmaNode): boolean {
+  for (const child of frame.children ?? []) {
+    if (TAB_ROOT_CHILD_PATTERN.test(child.name)) return true;
+  }
+  return false;
 }
 
 /** Single-pass walk: collect interactions and build edges, tracking parent screen */
@@ -107,6 +133,7 @@ function collectInteractions(
         nodes.get(screenId)?.name ?? '',
         interaction.trigger.type,
         interaction.actions,
+        node.absoluteBoundingBox,
       );
 
       const existing = edges.get(screenId) ?? [];
@@ -167,13 +194,14 @@ function extractEdges(
   sourceNodeName: string,
   trigger: string,
   actions: InteractionAction[],
+  sourceElementBoundingBox?: import('../types.js').BoundingBox,
 ): GraphEdge[] {
   const edges: GraphEdge[] = [];
 
   for (const action of actions) {
     if (action.type === 'CONDITIONAL' && action.conditionalBlocks) {
       for (const block of action.conditionalBlocks) {
-        edges.push(...extractEdges(sourceNodeId, sourceNodeName, trigger, block.actions));
+        edges.push(...extractEdges(sourceNodeId, sourceNodeName, trigger, block.actions, sourceElementBoundingBox));
       }
       continue;
     }
@@ -186,6 +214,7 @@ function extractEdges(
         navigation: action.navigation,
         trigger,
         actionType: action.type,
+        sourceElementBoundingBox,
       });
     }
   }
