@@ -9,3 +9,4 @@ export { overlayTrapAnalyzer } from './spatial/overlay-traps.js';
 export { scan } from './scanner.js';
 export { formatJson } from './reporters/json.js';
 export { formatTerminal } from './reporters/terminal.js';
+export { formatHtml } from './reporters/html.js';

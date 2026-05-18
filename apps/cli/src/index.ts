@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { program } from 'commander';
-import { FigmaClient, FigmaApiError, scan, formatJson, formatTerminal } from '@protoscan/core';
+import { FigmaClient, FigmaApiError, scan, formatJson, formatTerminal, formatHtml } from '@protoscan/core';
 import { writeFileSync } from 'node:fs';
 
 program
@@ -13,7 +13,7 @@ program
   .description('Scan a Figma file for prototype issues')
   .argument('<file-key>', 'Figma file key (from the URL)')
   .option('-t, --token <token>', 'Figma personal access token (or set FIGMA_TOKEN env var)')
-  .option('-f, --format <format>', 'Output format: terminal, json', 'terminal')
+  .option('-f, --format <format>', 'Output format: terminal, json, html', 'terminal')
   .option('-o, --output <path>', 'Output file path (for json/html formats)')
   .option('--min-touch-target <px>', 'Minimum touch target size in px', '44')
   .option('--skip <checks>', 'Comma-separated list of checks to skip')
@@ -58,8 +58,10 @@ program
       });
 
       // Format output
-      const output =
-        options.format === 'json' ? formatJson(result) : formatTerminal(result);
+      const formatters: Record<string, (r: typeof result) => string> = {
+        json: formatJson, html: formatHtml, terminal: formatTerminal,
+      };
+      const output = (formatters[options.format] ?? formatTerminal)(result);
 
       // Write output
       if (options.output) {
