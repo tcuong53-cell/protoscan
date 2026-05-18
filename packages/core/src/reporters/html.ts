@@ -133,6 +133,17 @@ export function formatHtml(result: ScanResult): string {
   </div>
 
   <div class="issues-header">Issues</div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;font-size:13px;color:var(--muted);">
+    <strong style="color:var(--text);">How to read this report:</strong><br>
+    <b style="color:var(--critical);">orphan</b> — Screen is not reachable from any flow starting point. Could be an unused screen, a variant, or a missing connection.<br>
+    <b style="color:var(--critical);">dead-end</b> — Screen has no way out. Users will get stuck here.<br>
+    <b style="color:var(--critical);">overlay-trap</b> — Overlay opens but has no close/back action. Users are trapped.<br>
+    <b style="color:var(--high);">back-nav</b> — Screen can be reached but has no way to go back.<br>
+    <b style="color:var(--high);">touch-target</b> — Interactive element is smaller than ${result.issues.find(i=>i.category==='touch-target')?.evidence?.minSize ?? 44}px minimum.<br>
+    <b style="color:var(--medium);">overlap</b> — Two interactive elements overlap, causing wrong taps.<br>
+    <b style="color:var(--medium);">scroll</b> — Content extends beyond frame but scroll is not enabled.<br>
+    <b style="color:var(--medium);">incomplete-connection</b> — Interaction exists but has no destination set (prototyping not finished).
+  </div>
   <div id="issues">
     ${issues.map((issue) => {
       const nodeId = (issue.nodeId || issue.screenId || '').replace(':', '-');

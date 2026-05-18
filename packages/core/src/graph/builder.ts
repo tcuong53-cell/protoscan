@@ -13,8 +13,8 @@ import type {
  * Single-pass: walks the document tree, collects screens as nodes,
  * and creates edges from prototype interactions in O(N).
  */
-/** Patterns that indicate a page is NOT a prototype (design system, archive, etc.) */
-const NON_PROTOTYPE_PAGE = /\b(foundation|component|archive|roadmap|changelog|token|icon|asset|styleguide|style.guide)\b/i;
+/** Patterns that indicate a page or section is NOT a prototype (design system, archive, etc.) */
+const NON_PROTOTYPE_PATTERN = /\b(foundation|component|archive|roadmap|changelog|token|icon|asset|styleguide|style.guide|template|gradient|ds.overview)\b/i;
 
 export interface BuildGraphOptions {
   /** Only scan these page IDs (default: auto-detect prototype pages) */
@@ -48,9 +48,9 @@ function filterPages(pages: FigmaNode[], pageIds?: string[]): FigmaNode[] {
   }
 
   // Auto-detect: if any page looks like a design/prototype page, skip non-prototype pages
-  const hasPrototypePage = pages.some((p) => !NON_PROTOTYPE_PAGE.test(p.name));
+  const hasPrototypePage = pages.some((p) => !NON_PROTOTYPE_PATTERN.test(p.name));
   if (hasPrototypePage && pages.length > 1) {
-    const filtered = pages.filter((p) => !NON_PROTOTYPE_PAGE.test(p.name));
+    const filtered = pages.filter((p) => !NON_PROTOTYPE_PATTERN.test(p.name));
     if (filtered.length > 0) return filtered;
   }
 
@@ -67,7 +67,6 @@ function collectScreens(
 ): void {
   for (const child of parent.children ?? []) {
     if (child.type === 'SECTION') {
-      // Sections are organizational containers — recurse into them
       collectScreens(child, pageId, nodes, edges);
     } else if (child.type === 'FRAME' || child.type === 'COMPONENT' || child.type === 'COMPONENT_SET') {
       const ARCHIVED_PATTERN = /\b(archived?|deprecated|old|legacy)\b/i;

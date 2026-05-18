@@ -9,12 +9,23 @@ import { z } from 'zod';
 import { FigmaClient, FigmaApiError, scan, formatTerminal, formatJson } from '@protoscan/core';
 
 const ScanArgsSchema = z.object({
-  file_key: z.string().describe('Figma file key (from the URL, e.g. "abc123XYZ")'),
+  file_key: z.string().describe('Figma file key or full URL (e.g. "abc123" or "https://figma.com/design/abc123/Name?node-id=7-2")'),
   token: z.string().optional().describe('Figma Personal Access Token. Falls back to FIGMA_TOKEN env var.'),
   format: z.enum(['terminal', 'json']).optional().default('terminal').describe('Output format'),
   min_touch_target: z.number().optional().default(44).describe('Minimum touch target size in px'),
   skip: z.array(z.string()).optional().describe('Checks to skip: dead-end, orphan, back-nav, touch-target, overlap, scroll, overlay-trap'),
 });
+
+function parseFigmaInput(input: string): { fileKey: string; pageIds: string[] } {
+  const urlMatch = input.match(/figma\.com\/(?:design|file)\/([a-zA-Z0-9]+)/);
+  if (urlMatch) {
+    const fileKey = urlMatch[1];
+    const nodeMatch = input.match(/node-id=([0-9]+-[0-9]+)/);
+    const pageIds = nodeMatch ? [nodeMatch[1].replace('-', ':')] : [];
+    return { fileKey, pageIds };
+  }
+  return { fileKey: input, pageIds: [] };
+}
 
 const server = new Server(
   { name: 'protoscan', version: '0.0.1' },
@@ -61,13 +72,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
+    const { fileKey, pageIds } = parseFigmaInput(args.file_key);
     const client = new FigmaClient(token);
-    const file = await client.getFile(args.file_key);
+    const file = await client.getFile(fileKey);
 
     const result = await scan(file, {
-      fileKey: args.file_key,
+      fileKey,
       minTouchTarget: args.min_touch_target,
       skip: args.skip,
+      pageIds: pageIds.length ? pageIds : undefined,
     });
 
     const output = args.format === 'json'
