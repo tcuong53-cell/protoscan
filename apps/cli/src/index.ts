@@ -12,27 +12,23 @@ program
   .command('scan')
   .description('Scan a Figma file for prototype issues')
   .argument('<file-key-or-url>', 'Figma file key or full URL (e.g., "abc123" or "https://figma.com/design/abc123/Name?node-id=7-2")')
-  .option('-t, --token <token>', 'Figma personal access token (or set FIGMA_TOKEN env var)')
   .option('-f, --format <format>', 'Output format: terminal, json, html', 'terminal')
   .option('-o, --output <path>', 'Output file path (for json/html formats)')
   .option('--min-touch-target <px>', 'Minimum touch target size in px', '44')
   .option('--skip <checks>', 'Comma-separated list of checks to skip')
   .option('--pages <ids>', 'Comma-separated page IDs to scan (default: all)')
-  .option('--simulate', 'Run headless Playwright simulator to detect runtime nav failures (slow, requires Playwright)')
-  .option('--vision', 'Run AI vision analysis on each screen with GPT-4o (requires OPENAI_API_KEY)')
+  .option('--simulate', 'Run headless Playwright simulator to detect runtime nav failures (slow, requires @protoscan/simulator)')
+  .option('--vision', 'Run AI vision analysis on each screen with GPT-4o (requires OPENAI_API_KEY and @protoscan/vision)')
   .option('--max-vision-cost <usd>', 'Maximum USD to spend on vision analysis', '5')
   .action(async (input: string, options) => {
     // Parse Figma URL or raw file key
     const { fileKey, pageIds: urlPageIds } = parseFigmaInput(input);
 
-    const token = options.token || process.env.FIGMA_TOKEN;
+    const token = process.env.FIGMA_TOKEN;
     if (!token) {
-      console.error('Error: Figma token required. Set FIGMA_TOKEN env var or use --token flag.');
+      console.error('Error: Figma token required. Set the FIGMA_TOKEN environment variable.');
+      console.error('  export FIGMA_TOKEN=your_token_here');
       process.exit(1);
-    }
-
-    if (options.token) {
-      console.error('Warning: Token passed via --token is visible in shell history. Prefer FIGMA_TOKEN env var.');
     }
 
     const minTouchTarget = parseInt(options.minTouchTarget, 10);
@@ -62,12 +58,21 @@ program
       console.error('Analyzing...');
       const graph = buildGraph(file, { pageIds: pageIds.length ? pageIds : undefined });
 
-      let simulatorIssues: Awaited<ReturnType<typeof import('@protoscan/simulator').walkPrototype>> = [];
+      let simulatorIssues: Issue[] = [];
       if (options.simulate) {
-        console.error('Running simulator (this may take several minutes)...');
-        const { walkPrototype } = await import('@protoscan/simulator');
-        simulatorIssues = await walkPrototype(graph, { fileKey });
-        console.error(`Simulator: ${simulatorIssues.length} runtime issue(s) found.`);
+        try {
+          console.error('Running simulator (this may take several minutes)...');
+          const { walkPrototype } = await import('@protoscan/simulator');
+          simulatorIssues = await walkPrototype(graph, { fileKey });
+          console.error(`Simulator: ${simulatorIssues.length} runtime issue(s) found.`);
+        } catch (err: unknown) {
+          if (isModuleNotFound(err, '@protoscan/simulator')) {
+            console.error('Error: --simulate requires @protoscan/simulator.');
+            console.error('  npm install -g @protoscan/simulator');
+            process.exit(1);
+          }
+          throw err;
+        }
       }
 
       let visionIssues: Issue[] = [];
@@ -77,16 +82,29 @@ program
           console.error('Error: --vision requires OPENAI_API_KEY env var.');
           process.exit(1);
         }
-        console.error('Running AI vision analysis (this may take a few minutes)...');
-        const { analyzeVision } = await import('@protoscan/vision');
-        visionIssues = await analyzeVision(graph, {
-          figmaToken: token,
-          openaiApiKey: openaiKey,
-          fileKey,
-          maxCost: parseFloat(options.maxVisionCost),
-          maxScreens: 200,
-        });
-        console.error(`Vision: ${visionIssues.length} issue(s) found.`);
+        console.error('');
+        console.error('⚠  Vision mode: screenshots of your Figma screens will be uploaded to OpenAI\'s API for analysis.');
+        console.error('   Review OpenAI\'s data usage policy at https://openai.com/policies/api-data-usage-policies');
+        console.error('');
+        try {
+          console.error('Running AI vision analysis (this may take a few minutes)...');
+          const { analyzeVision } = await import('@protoscan/vision');
+          visionIssues = await analyzeVision(graph, {
+            figmaToken: token,
+            openaiApiKey: openaiKey,
+            fileKey,
+            maxCost: parseFloat(options.maxVisionCost),
+            maxScreens: 200,
+          });
+          console.error(`Vision: ${visionIssues.length} issue(s) found.`);
+        } catch (err: unknown) {
+          if (isModuleNotFound(err, '@protoscan/vision')) {
+            console.error('Error: --vision is not available in this distribution.');
+            console.error('   Contact support for access to ProtoScan Vision.');
+            process.exit(1);
+          }
+          throw err;
+        }
       }
 
       const result = await scan(file, {
@@ -120,6 +138,13 @@ program
       process.exit(1);
     }
   });
+
+/** Returns true if the error is a module-not-found for the given package */
+function isModuleNotFound(err: unknown, pkg: string): boolean {
+  if (!(err instanceof Error)) return false;
+  const e = err as NodeJS.ErrnoException;
+  return e.code === 'ERR_MODULE_NOT_FOUND' && e.message.includes(pkg);
+}
 
 /** Parse a Figma URL or raw file key into fileKey + optional pageIds */
 function parseFigmaInput(input: string): { fileKey: string; pageIds: string[] } {

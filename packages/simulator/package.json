@@ -12,15 +12,20 @@
       "import": "./dist/index.js"
     }
   },
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "poc": "tsx src/poc.ts",
     "poc:capture": "tsx src/poc.ts --capture",
     "clean": "rm -rf dist"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
-    "@protoscan/core": "*",
+    "@protoscan/core": "0.0.1",
     "playwright": "^1.52.0"
   },
   "devDependencies": {
@@ -28,5 +33,8 @@
     "tsx": "^4.22.1",
     "typescript": "^6.0.3",
     "vitest": "*"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }

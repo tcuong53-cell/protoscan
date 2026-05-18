@@ -152,7 +152,6 @@ export async function walkPrototype(
 
   const browser = await chromium.launch({
     headless: true,
-    args: ['--disable-web-security', '--disable-features=IsolateOrigins,site-per-process'],
   });
 
   // Large viewport so the phone mockup renders at native scale and never clips
@@ -178,6 +177,18 @@ export async function walkPrototype(
   }
 
   const page = await context.newPage();
+
+  // Block navigation outside figma.com to prevent OPEN_URL prototype actions
+  // from reaching attacker-controlled URLs during the walk.
+  await page.route('**', (route) => {
+    const url = new URL(route.request().url());
+    if (url.hostname.endsWith('figma.com') || url.hostname.endsWith('amazonaws.com')) {
+      route.continue();
+    } else {
+      route.abort('blockedbyclient');
+    }
+  });
+
   const issues: Issue[] = [];
   let issueCounter = 0;
   let screensWalked = 0;

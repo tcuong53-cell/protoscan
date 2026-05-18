@@ -11,11 +11,16 @@
       "import": "./dist/index.js"
     }
   },
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "license": "MIT",
   "engines": {

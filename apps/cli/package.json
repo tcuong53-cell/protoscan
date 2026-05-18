@@ -6,14 +6,22 @@
   "bin": {
     "protoscan": "dist/index.js"
   },
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsup src/index.ts --format esm --external @protoscan/simulator --external playwright --external @protoscan/vision --external openai",
+    "prepublishOnly": "npm run build",
     "dev": "tsx src/index.ts",
     "clean": "rm -rf dist"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
-    "@protoscan/core": "*",
+    "@protoscan/core": "0.0.1",
     "commander": "^13.1.0"
+  },
+  "optionalDependencies": {
+    "@protoscan/simulator": "0.0.1"
   },
   "license": "MIT",
   "engines": {

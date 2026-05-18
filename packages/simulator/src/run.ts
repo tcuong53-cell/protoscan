@@ -5,7 +5,7 @@
 import { FigmaClient, buildGraph } from '@protoscan/core';
 import { walkPrototype } from './walker.js';
 
-const FILE_KEY = 'YOUR_FIGMA_FILE_KEY';
+const FILE_KEY = process.env.FIGMA_FILE_KEY ?? 'YOUR_FILE_KEY';
 const TOKEN = process.env.FIGMA_TOKEN ?? '';
 
 if (!TOKEN) { console.error('FIGMA_TOKEN required'); process.exit(1); }

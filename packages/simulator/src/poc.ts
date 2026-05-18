@@ -20,7 +20,7 @@ import { writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { FigmaClient, buildGraph } from '@protoscan/core';
 
-const FIGMA_FILE_KEY = 'YOUR_FIGMA_FILE_KEY';
+const FIGMA_FILE_KEY = process.env.FIGMA_FILE_KEY ?? 'YOUR_FILE_KEY';
 const SESSION_PATH = resolve(import.meta.dirname, '../figma-session.json');
 const NAVIGATE_TIMEOUT_MS = 15_000;
 
