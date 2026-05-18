@@ -1,0 +1,22 @@
+{
+  "name": "@protoscan/cli",
+  "version": "0.0.1",
+  "description": "CLI tool for automated Figma prototype QA.",
+  "type": "module",
+  "bin": {
+    "protoscan": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm",
+    "dev": "tsx src/index.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@protoscan/core": "*",
+    "commander": "^13.1.0"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

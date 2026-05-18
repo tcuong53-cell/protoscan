@@ -1,0 +1,11 @@
+export { type Issue, type Analyzer, type AnalyzerOptions, type FigmaFile, type FigmaNode, type PrototypeGraph, type ScanResult, type ScanStats } from './types.js';
+export { FigmaClient, FigmaApiError } from './figma-client.js';
+export { buildGraph } from './graph/builder.js';
+export { graphAnalyzer } from './graph/analyzer.js';
+export { touchTargetAnalyzer } from './spatial/touch-targets.js';
+export { overlapAnalyzer } from './spatial/overlap.js';
+export { scrollAnalyzer } from './spatial/scroll.js';
+export { overlayTrapAnalyzer } from './spatial/overlay-traps.js';
+export { scan } from './scanner.js';
+export { formatJson } from './reporters/json.js';
+export { formatTerminal } from './reporters/terminal.js';

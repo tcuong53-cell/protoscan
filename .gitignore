@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.local
+coverage/
+.DS_Store
+Thumbs.db
+.mcp.json
+dogfood*.json
+.panel/

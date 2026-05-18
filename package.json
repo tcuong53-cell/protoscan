@@ -1,0 +1,38 @@
+{
+  "name": "protoscan",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Automated Figma prototype QA — detect dead ends, orphan screens, broken navigation, and UX issues before sharing your prototype.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
+  },
+  "keywords": [
+    "figma",
+    "prototype",
+    "qa",
+    "design",
+    "testing",
+    "dead-end",
+    "navigation",
+    "ux"
+  ],
+  "author": "OxxO Pro",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.22.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
