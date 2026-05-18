@@ -73,6 +73,8 @@ export function formatHtml(result: ScanResult): string {
   .issue-title { font-weight: 600; font-size: 14px; }
   .issue-screen { color: var(--muted); font-size: 13px; margin-top: 2px; }
   .issue-category { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .issue-link { display: inline-block; background: var(--accent); color: #fff; border-radius: 6px; padding: 2px 10px; font-size: 11px; text-decoration: none; margin-top: 6px; margin-left: 4px; }
+  .issue-link:hover { opacity: 0.8; }
 
   /* Footer */
   .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); text-align: center; color: var(--muted); font-size: 13px; }
@@ -132,15 +134,20 @@ export function formatHtml(result: ScanResult): string {
 
   <div class="issues-header">Issues</div>
   <div id="issues">
-    ${issues.map((issue) => `
+    ${issues.map((issue) => {
+      const nodeId = (issue.nodeId || issue.screenId || '').replace(':', '-');
+      const figmaUrl = nodeId ? `https://www.figma.com/design/${file.key}/?node-id=${nodeId}` : '';
+      return `
     <div class="issue" data-severity="${issue.severity}" data-category="${issue.category}">
       <div class="severity-dot ${issue.severity}"></div>
       <div class="issue-body">
         <div class="issue-title">${esc(issue.message)}</div>
         <div class="issue-screen">${esc(issue.screenName || '(file-level)')}</div>
         <span class="issue-category">${issue.category}</span>
+        ${figmaUrl ? `<a class="issue-link" href="${figmaUrl}" target="_blank" rel="noopener">Open in Figma ↗</a>` : ''}
       </div>
-    </div>`).join('\n')}
+    </div>`;
+    }).join('\n')}
   </div>
 
   <div class="footer">
