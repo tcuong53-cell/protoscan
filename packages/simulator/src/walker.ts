@@ -150,9 +150,19 @@ export async function walkPrototype(
 
   const hasSession = existsSync(sessionPath);
 
-  const browser = await chromium.launch({
-    headless: true,
-  });
+  let browser: Awaited<ReturnType<typeof chromium.launch>>;
+  try {
+    browser = await chromium.launch({ headless: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Executable') || msg.includes('playwright install')) {
+      throw new Error(
+        'Chromium browser not found. Run: npx playwright install chromium\n' +
+        'Or reinstall the package: npm install @protoscan/simulator',
+      );
+    }
+    throw err;
+  }
 
   // Large viewport so the phone mockup renders at native scale and never clips
   const context = await browser.newContext({

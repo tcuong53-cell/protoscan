@@ -16,6 +16,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
     "prepublishOnly": "npm run build",
+    "postinstall": "playwright install chromium",
     "test": "vitest run",
     "poc": "tsx src/poc.ts",
     "poc:capture": "tsx src/poc.ts --capture",
