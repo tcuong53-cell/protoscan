@@ -19,7 +19,7 @@ export class FigmaClient {
     return data as FigmaFile;
   }
 
-  private async request(path: string): Promise<unknown> {
+  private async request(path: string, attempt = 0): Promise<unknown> {
     await this.throttle();
 
     const controller = new AbortController();
@@ -28,6 +28,13 @@ export class FigmaClient {
       headers: { 'X-Figma-Token': this.token },
       signal: controller.signal,
     }).finally(() => clearTimeout(timeout));
+
+    if (response.status === 429 && attempt < 2) {
+      const retryAfter = parseInt(response.headers.get('Retry-After') ?? '10', 10);
+      const waitMs = (isNaN(retryAfter) ? 10 : retryAfter) * 1000;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      return this.request(path, attempt + 1);
+    }
 
     if (!response.ok) {
       const message = await this.parseError(response);

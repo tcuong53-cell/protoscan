@@ -28,13 +28,21 @@ npx @protoscan/cli scan YOUR_FILE_KEY
 
 ```bash
 # Set your Figma token (get one at figma.com → Settings → Personal access tokens)
+# macOS/Linux:
 export FIGMA_TOKEN=your_token_here
+# PowerShell:
+$env:FIGMA_TOKEN="your_token_here"
+# Windows cmd:
+set FIGMA_TOKEN=your_token_here
 
 # Scan a file
 npx @protoscan/cli scan YOUR_FIGMA_FILE_KEY
 
 # Generate an HTML report
 npx @protoscan/cli scan YOUR_FIGMA_FILE_KEY --format html --output report.html
+
+# Pass token inline (alternative to env var)
+npx @protoscan/cli scan YOUR_FIGMA_FILE_KEY --token figd_xxxx
 
 # Use a full Figma URL (filters to the page in the URL)
 npx @protoscan/cli scan "https://www.figma.com/design/YOUR_FIGMA_FILE_KEY/My-App?node-id=7-2"

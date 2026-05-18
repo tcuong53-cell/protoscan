@@ -1,17 +1,32 @@
 #!/usr/bin/env node
 import { program } from 'commander';
 import { FigmaClient, FigmaApiError, scan, formatJson, formatTerminal, formatHtml, buildGraph, type Issue } from '@protoscan/core';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, existsSync } from 'node:fs';
 
 program
   .name('protoscan')
   .description('Automated Figma prototype QA — detect dead ends, orphan screens, and navigation issues.')
-  .version('0.0.1');
+  .version('0.0.1')
+  .addHelpText('after', `
+Examples:
+  protoscan scan YOUR_FILE_KEY
+  protoscan scan "https://www.figma.com/design/abc123/My-App?node-id=7-2"
+  protoscan scan FILE_KEY --format html --output report.html
+  protoscan scan FILE_KEY --token figd_xxxx
+
+First time? Set your Figma token:
+  macOS/Linux:  export FIGMA_TOKEN=your_token_here
+  PowerShell:   $env:FIGMA_TOKEN="your_token_here"
+  Windows cmd:  set FIGMA_TOKEN=your_token_here
+
+  Get your token at: https://www.figma.com/settings (Personal access tokens)
+`);
 
 program
   .command('scan')
   .description('Scan a Figma file for prototype issues')
   .argument('<file-key-or-url>', 'Figma file key or full URL (e.g., "abc123" or "https://figma.com/design/abc123/Name?node-id=7-2")')
+  .option('-t, --token <token>', 'Figma Personal Access Token (or set FIGMA_TOKEN env var)')
   .option('-f, --format <format>', 'Output format: terminal, json, html', 'terminal')
   .option('-o, --output <path>', 'Output file path (for json/html formats)')
   .option('--min-touch-target <px>', 'Minimum touch target size in px', '44')
@@ -24,10 +39,16 @@ program
     // Parse Figma URL or raw file key
     const { fileKey, pageIds: urlPageIds } = parseFigmaInput(input);
 
-    const token = process.env.FIGMA_TOKEN;
+    const token = options.token ?? process.env.FIGMA_TOKEN;
     if (!token) {
-      console.error('Error: Figma token required. Set the FIGMA_TOKEN environment variable.');
-      console.error('  export FIGMA_TOKEN=your_token_here');
+      console.error('Error: Figma token required.');
+      console.error('');
+      console.error('  macOS/Linux:  export FIGMA_TOKEN=your_token_here');
+      console.error('  PowerShell:   $env:FIGMA_TOKEN="your_token_here"');
+      console.error('  Windows cmd:  set FIGMA_TOKEN=your_token_here');
+      console.error('  Or pass:      --token your_token_here');
+      console.error('');
+      console.error('  Get your token at: https://www.figma.com/settings (Personal access tokens)');
       process.exit(1);
     }
 
@@ -82,9 +103,14 @@ program
           console.error('Error: --vision requires OPENAI_API_KEY env var.');
           process.exit(1);
         }
+        const screenCount = graph.nodes.size;
+        const COST_PER_SCREEN = 0.005;
+        const estimatedCost = (screenCount * COST_PER_SCREEN).toFixed(2);
+        const maxCost = parseFloat(options.maxVisionCost);
         console.error('');
         console.error('⚠  Vision mode: screenshots of your Figma screens will be uploaded to OpenAI\'s API for analysis.');
         console.error('   Review OpenAI\'s data usage policy at https://openai.com/policies/api-data-usage-policies');
+        console.error(`   Screens: ${screenCount} — estimated cost: ~$${estimatedCost} (cap: $${maxCost} via --max-vision-cost)`);
         console.error('');
         try {
           console.error('Running AI vision analysis (this may take a few minutes)...');
@@ -93,7 +119,7 @@ program
             figmaToken: token,
             openaiApiKey: openaiKey,
             fileKey,
-            maxCost: parseFloat(options.maxVisionCost),
+            maxCost,
             maxScreens: 200,
           });
           console.error(`Vision: ${visionIssues.length} issue(s) found.`);
@@ -121,6 +147,9 @@ program
       const output = (formatters[options.format] ?? formatTerminal)(result);
 
       if (options.output) {
+        if (existsSync(options.output)) {
+          console.error(`Warning: overwriting existing file ${options.output}`);
+        }
         writeFileSync(options.output, output, 'utf-8');
         console.error(`Report written to ${options.output}`);
       } else {
