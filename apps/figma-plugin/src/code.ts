@@ -18,8 +18,23 @@ interface ScreenNode {
   hasCloseAction: boolean;
   isOverlayTarget: boolean;
   incomingCount: number;
-  width: number;
-  height: number;
+}
+
+// Collect destinations from a node tree (reusable for walkNode and BFS)
+function collectActions(node: SceneNode, callback: (action: Action) => void) {
+  if ('reactions' in node && node.reactions) {
+    for (const reaction of node.reactions) {
+      const actions = reaction.actions ?? (reaction.action ? [reaction.action] : []);
+      for (const action of actions) {
+        if (action) callback(action);
+      }
+    }
+  }
+  if ('children' in node) {
+    for (const child of (node as FrameNode).children) {
+      collectActions(child, callback);
+    }
+  }
 }
 
 function scanPrototype(): PluginIssue[] {
@@ -31,7 +46,6 @@ function scanPrototype(): PluginIssue[] {
   const topFrames = page.children.filter(
     (n): n is FrameNode => n.type === 'FRAME',
   );
-
   for (const frame of topFrames) {
     screens.set(frame.id, {
       id: frame.id,
@@ -41,8 +55,6 @@ function scanPrototype(): PluginIssue[] {
       hasCloseAction: false,
       isOverlayTarget: false,
       incomingCount: 0,
-      width: frame.width,
-      height: frame.height,
     });
   }
 
@@ -59,7 +71,6 @@ function scanPrototype(): PluginIssue[] {
   const destinationIds = new Set<string>();
 
   function walkNode(node: SceneNode, parentScreenId: string | null) {
-    // Check reactions on this node
     if ('reactions' in node && node.reactions) {
       for (const reaction of node.reactions) {
         const actions = reaction.actions ?? (reaction.action ? [reaction.action] : []);
@@ -69,26 +80,23 @@ function scanPrototype(): PluginIssue[] {
           const screenData = parentScreenId ? screens.get(parentScreenId) : null;
 
           if (action.type === 'NODE' && action.destinationId) {
-            // NAVIGATE action
             if (screenData) screenData.hasOutgoing = true;
             destinationIds.add(action.destinationId);
 
-            // Track overlay targets
             if (action.navigation === 'OVERLAY') {
               overlayTargets.add(action.destinationId);
             }
 
-            // Check touch target size
+            // Check touch target size — only on nodes with explicit dimensions
             if ('width' in node && 'height' in node) {
-              const w = (node as FrameNode).width;
-              const h = (node as FrameNode).height;
-              if (w < 44 || h < 44) {
+              const n = node as SceneNode & { width: number; height: number };
+              if (n.width < 44 || n.height < 44) {
                 issues.push({
                   severity: 'high',
                   category: 'touch-target',
                   screenName: screens.get(parentScreenId ?? '')?.name ?? 'Unknown',
                   screenId: parentScreenId ?? node.id,
-                  message: `"${node.name}" is ${Math.round(w)}×${Math.round(h)}px — below 44×44px minimum touch target`,
+                  message: `Touch target too small: "${node.name}" is ${Math.round(n.width)}x${Math.round(n.height)}px (min 44x44)`,
                 });
               }
             }
@@ -101,7 +109,6 @@ function scanPrototype(): PluginIssue[] {
       }
     }
 
-    // Recurse into children
     if ('children' in node) {
       for (const child of (node as FrameNode).children) {
         walkNode(child, parentScreenId ?? (screens.has(node.id) ? node.id : null));
@@ -126,103 +133,81 @@ function scanPrototype(): PluginIssue[] {
   }
 
   // BFS from starting points to find reachable screens
+  // Handles destinations that may not be top-level frames
   const reachable = new Set<string>();
   const queue = [...startingPointIds];
   while (queue.length > 0) {
     const id = queue.shift()!;
     if (reachable.has(id)) continue;
     reachable.add(id);
-    // Find all destinations from this screen's nodes
-    const frame = topFrames.find((f) => f.id === id);
-    if (!frame) continue;
-    const frameDestinations = new Set<string>();
-    function collectDests(node: SceneNode) {
-      if ('reactions' in node && node.reactions) {
-        for (const reaction of node.reactions) {
-          const actions = reaction.actions ?? (reaction.action ? [reaction.action] : []);
-          for (const action of actions) {
-            if (action?.type === 'NODE' && action.destinationId) {
-              frameDestinations.add(action.destinationId);
-            }
-          }
-        }
-      }
-      if ('children' in node) {
-        for (const child of (node as FrameNode).children) collectDests(child);
-      }
+
+    // Find the frame for this ID — check top frames first, then getNodeById
+    let frame: SceneNode | null = topFrames.find((f) => f.id === id) ?? null;
+    if (!frame) {
+      const node = figma.getNodeById(id);
+      if (node && 'children' in node) frame = node as SceneNode;
     }
-    collectDests(frame);
-    for (const destId of frameDestinations) queue.push(destId);
+    if (!frame) continue;
+
+    collectActions(frame, (action) => {
+      if (action.type === 'NODE' && action.destinationId) {
+        queue.push(action.destinationId);
+      }
+    });
   }
 
-  // Detect issues
+  // Detect issues with user-friendly messages
   for (const [id, screen] of screens) {
-    // Dead-end: no outgoing connections and no back/close
     if (!screen.hasOutgoing && !screen.hasBackAction && !screen.hasCloseAction) {
       issues.push({
         severity: 'critical',
         category: 'dead-end',
         screenName: screen.name,
         screenId: id,
-        message: `"${screen.name}" has no outgoing connections — users get stuck here`,
+        message: `No way out: "${screen.name}" has no links, back, or close actions`,
       });
     }
 
-    // Orphan: not reachable from any starting point (only if starting points exist)
     if (startingPointIds.size > 0 && !reachable.has(id) && !startingPointIds.has(id)) {
       issues.push({
         severity: 'high',
         category: 'orphan',
         screenName: screen.name,
         screenId: id,
-        message: `"${screen.name}" is unreachable from any flow starting point`,
+        message: `Unreachable: "${screen.name}" can't be reached from any starting point`,
       });
     }
 
-    // Missing back navigation: has incoming but no back/close and is not a starting point
     if (screen.incomingCount > 0 && !screen.hasBackAction && !startingPointIds.has(id)) {
       issues.push({
         severity: 'medium',
         category: 'back-nav',
         screenName: screen.name,
         screenId: id,
-        message: `"${screen.name}" has no back navigation — users can't return`,
+        message: `No back button: "${screen.name}" — users can't return to previous screen`,
       });
     }
 
-    // Overlay trap: is an overlay target but has no close/back
     if (screen.isOverlayTarget && !screen.hasCloseAction && !screen.hasBackAction) {
       issues.push({
         severity: 'critical',
         category: 'overlay-trap',
         screenName: screen.name,
         screenId: id,
-        message: `"${screen.name}" is an overlay with no close/back action — traps the user`,
+        message: `Overlay trap: "${screen.name}" has no close or back — users get stuck`,
       });
     }
   }
 
-  // Sort by severity
   const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
   issues.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
-
   return issues;
 }
 
-// Plugin entry point
-figma.showUI(__html__, { width: 400, height: 500, themeColors: true });
-
-// Run scan immediately
-const issues = scanPrototype();
-const screenCount = figma.currentPage.children.filter((n) => n.type === 'FRAME').length;
-const startingPoints = figma.currentPage.flowStartingPoints?.length ?? 0;
-
-figma.ui.postMessage({
-  type: 'scan-results',
-  issues,
-  stats: {
-    screens: screenCount,
-    startingPoints,
+function buildStats(issues: PluginIssue[]) {
+  return {
+    screens: figma.currentPage.children.filter((n) => n.type === 'FRAME').length,
+    startingPoints: figma.currentPage.flowStartingPoints?.length ?? 0,
     totalIssues: issues.length,
     bySeverity: {
       critical: issues.filter((i) => i.severity === 'critical').length,
@@ -230,35 +215,34 @@ figma.ui.postMessage({
       medium: issues.filter((i) => i.severity === 'medium').length,
       low: issues.filter((i) => i.severity === 'low').length,
     },
-  },
-});
+  };
+}
+
+// Plugin entry point
+figma.showUI(__html__, { width: 440, height: 520, themeColors: true });
+
+// Delay initial scan to let UI mount its onmessage handler
+setTimeout(() => {
+  const issues = scanPrototype();
+  figma.ui.postMessage({ type: 'scan-results', issues, stats: buildStats(issues) });
+}, 100);
 
 // Handle messages from UI
 figma.ui.onmessage = (msg: { type: string; nodeId?: string }) => {
   if (msg.type === 'focus-node' && msg.nodeId) {
     const node = figma.getNodeById(msg.nodeId);
-    if (node && 'x' in node) {
-      figma.viewport.scrollAndZoomIntoView([node as SceneNode]);
-      figma.currentPage.selection = [node as SceneNode];
+    // Verify node exists and hasn't been removed
+    if (node && 'type' in node && node.type !== 'DOCUMENT' && node.type !== 'PAGE') {
+      try {
+        figma.viewport.scrollAndZoomIntoView([node as SceneNode]);
+        figma.currentPage.selection = [node as SceneNode];
+      } catch {
+        // Node may have been deleted — silently ignore
+      }
     }
   } else if (msg.type === 'rescan') {
     const newIssues = scanPrototype();
-    const newScreenCount = figma.currentPage.children.filter((n) => n.type === 'FRAME').length;
-    figma.ui.postMessage({
-      type: 'scan-results',
-      issues: newIssues,
-      stats: {
-        screens: newScreenCount,
-        startingPoints: figma.currentPage.flowStartingPoints?.length ?? 0,
-        totalIssues: newIssues.length,
-        bySeverity: {
-          critical: newIssues.filter((i) => i.severity === 'critical').length,
-          high: newIssues.filter((i) => i.severity === 'high').length,
-          medium: newIssues.filter((i) => i.severity === 'medium').length,
-          low: newIssues.filter((i) => i.severity === 'low').length,
-        },
-      },
-    });
+    figma.ui.postMessage({ type: 'scan-results', issues: newIssues, stats: buildStats(newIssues) });
   } else if (msg.type === 'close') {
     figma.closePlugin();
   }
