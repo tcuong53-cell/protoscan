@@ -170,6 +170,86 @@ describe('scroll', () => {
   });
 });
 
+// ─── Touch Targets (edge cases) ───
+
+describe('touch-targets edge cases', () => {
+  it('skips non-interactive elements', async () => {
+    const file = makeFile([{
+      id: '1:0', name: 'Page', type: 'CANVAS',
+      children: [{
+        id: '2:0', name: 'Home', type: 'FRAME',
+        children: [{
+          id: '3:0', name: 'Label', type: 'TEXT',
+          absoluteBoundingBox: { x: 0, y: 0, width: 20, height: 12 },
+          // no interactions
+        }],
+      }],
+    }]);
+
+    const issues = await touchTargetAnalyzer.analyze(file, {});
+    expect(issues.length).toBe(0);
+  });
+
+  it('disabled when minTouchTarget is 0', async () => {
+    const file = makeFile([{
+      id: '1:0', name: 'Page', type: 'CANVAS',
+      children: [{
+        id: '2:0', name: 'Home', type: 'FRAME',
+        children: [{
+          id: '3:0', name: 'Tiny', type: 'RECTANGLE',
+          absoluteBoundingBox: { x: 0, y: 0, width: 10, height: 10 },
+          interactions: [{ trigger: { type: 'ON_CLICK' }, actions: [{ type: 'NODE' as const, destinationId: '2:1', navigation: 'NAVIGATE' as const }] }],
+        }],
+      }],
+    }]);
+
+    const issues = await touchTargetAnalyzer.analyze(file, { minTouchTarget: 0 });
+    expect(issues.length).toBe(0);
+  });
+});
+
+// ─── Scroll (edge cases) ───
+
+describe('scroll edge cases', () => {
+  it('does not flag when content fits within frame', async () => {
+    const file = makeFile([{
+      id: '1:0', name: 'Page', type: 'CANVAS',
+      children: [{
+        id: '2:0', name: 'Short Page', type: 'FRAME',
+        absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 812 },
+        clipsContent: true,
+        overflowDirection: 'NONE' as const,
+        children: [{
+          id: '3:0', name: 'Short Content', type: 'RECTANGLE',
+          absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 400 },
+        }],
+      }],
+    }]);
+
+    const issues = await scrollAnalyzer.analyze(file, {});
+    expect(issues.length).toBe(0);
+  });
+
+  it('does not flag when clipsContent is false', async () => {
+    const file = makeFile([{
+      id: '1:0', name: 'Page', type: 'CANVAS',
+      children: [{
+        id: '2:0', name: 'Open Frame', type: 'FRAME',
+        absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 812 },
+        clipsContent: false,
+        overflowDirection: 'NONE' as const,
+        children: [{
+          id: '3:0', name: 'Long Content', type: 'RECTANGLE',
+          absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 1400 },
+        }],
+      }],
+    }]);
+
+    const issues = await scrollAnalyzer.analyze(file, {});
+    expect(issues.length).toBe(0);
+  });
+});
+
 // ─── Overlay Traps ───
 
 describe('overlay-traps', () => {

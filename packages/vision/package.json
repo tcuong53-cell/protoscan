@@ -19,7 +19,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@protoscan/core": "*",
+    "@protoscan/core": "0.0.1",
     "openai": "^4.100.0"
   },
   "devDependencies": {

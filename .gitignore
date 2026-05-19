@@ -8,5 +8,6 @@ coverage/
 Thumbs.db
 .mcp.json
 dogfood*.json
+report*.html
 .panel/
 private/
