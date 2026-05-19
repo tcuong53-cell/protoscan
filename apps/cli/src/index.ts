@@ -262,7 +262,7 @@ function isModuleNotFound(err: unknown, pkg: string): boolean {
 
 /** Parse a Figma URL or raw file key into fileKey + optional pageIds */
 function parseFigmaInput(input: string): { fileKey: string; pageIds: string[] } {
-  // Full URL: https://www.figma.com/design/YOUR_FIGMA_FILE_KEY/My-App?node-id=7-2
+  // Full URL: https://www.figma.com/design/abc123DEF456/My-App?node-id=7-2
   const urlMatch = input.match(/figma\.com\/(?:design|file)\/([a-zA-Z0-9]+)/);
   if (urlMatch) {
     const fileKey = urlMatch[1];

@@ -20,6 +20,18 @@ import { writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { FigmaClient, buildGraph } from '@protoscan/core';
 
+/** PostMessage event data from Figma Embed Kit 2.0 */
+interface FigmaPostMessageEvent {
+  type?: string;
+  data?: { presentedNodeId?: string };
+}
+
+/** Window with exposed POC functions (Playwright exposeFunction) */
+interface PocWindow extends Window {
+  __poc_earlyMsg: (data: unknown) => void;
+  __poc_onMessage: (data: unknown) => void;
+}
+
 const FIGMA_FILE_KEY = process.env.FIGMA_FILE_KEY ?? 'YOUR_FILE_KEY';
 const SESSION_PATH = resolve(import.meta.dirname, '../figma-session.json');
 const NAVIGATE_TIMEOUT_MS = 15_000;
@@ -186,13 +198,13 @@ async function runPOC(): Promise<void> {
   const earlyEvents: unknown[] = [];
   await embedPage.exposeFunction('__poc_earlyMsg', (data: unknown) => {
     earlyEvents.push(data);
-    const t = (data as any)?.type ?? '';
+    const t = (data as FigmaPostMessageEvent)?.type ?? '';
     if (t && !t.includes('multiplayer') && !t.includes('overlay')) {
       console.log(`[Q2][early] ${t}:`, JSON.stringify(data).slice(0, 100));
     }
   });
   await embedPage.evaluate(() => {
-    window.addEventListener('message', (e) => { (window as any).__poc_earlyMsg(e.data); });
+    window.addEventListener('message', (e) => { (window as unknown as PocWindow).__poc_earlyMsg(e.data); });
   });
 
   console.log('[Q2] Waiting up to 20s for Figma embed INITIAL_LOAD...');
@@ -221,14 +233,14 @@ async function runPOC(): Promise<void> {
   await embedPage.exposeFunction('__poc_onMessage', (data: unknown) => {
     receivedEvents.push(data);
     const preview = JSON.stringify(data).slice(0, 120);
-    if ((data as any)?.type === 'PRESENTED_NODE_CHANGED' || !(preview.includes('multiplayer') || preview.includes('overlay'))) {
+    if ((data as FigmaPostMessageEvent)?.type === 'PRESENTED_NODE_CHANGED' || !(preview.includes('multiplayer') || preview.includes('overlay'))) {
       console.log('[Q2] Received postMessage:', preview);
     }
   });
 
   await embedPage.evaluate(() => {
     window.addEventListener('message', (e) => {
-      (window as any).__poc_onMessage(e.data);
+      (window as unknown as PocWindow).__poc_onMessage(e.data);
     });
   });
 
@@ -299,7 +311,7 @@ async function runPOC(): Promise<void> {
   const q2Pass = presentedNodeEvents.length > 0;
   if (q2Pass) {
     const ev = presentedNodeEvents[0] as Record<string, unknown>;
-    console.log(`[Q2] PASS ✓ — PRESENTED_NODE_CHANGED fired. presentedNodeId: ${(ev.data as any)?.presentedNodeId ?? 'unknown'}`);
+    console.log(`[Q2] PASS ✓ — PRESENTED_NODE_CHANGED fired. presentedNodeId: ${(ev.data as FigmaPostMessageEvent['data'])?.presentedNodeId ?? 'unknown'}`);
   } else {
     console.log('[Q2] FAIL — No PRESENTED_NODE_CHANGED event received within timeout.');
     console.log(`[Q2] All messages received (${receivedEvents.length}):`, JSON.stringify(receivedEvents).slice(0, 500));
