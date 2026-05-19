@@ -151,7 +151,7 @@ protoscan/
 | Shareable report URL (`--upload`) | — | Included |
 | AI fix suggestions per issue | — | Included |
 
-Coming soon. [Join the waitlist](https://github.com/oxxo/protoscan/issues/1) or star the repo to get notified.
+Coming soon. [Star the repo](https://github.com/oxxo/protoscan) to get notified.
 
 ---
 

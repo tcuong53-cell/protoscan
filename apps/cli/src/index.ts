@@ -169,6 +169,7 @@ program
       }
 
       // Upload HTML report to GitHub Gist if requested
+      // Note: upload failures are non-blocking — exit code reflects scan results only
       if (options.upload) {
         const ghToken = process.env.GITHUB_TOKEN;
         if (!ghToken) {
