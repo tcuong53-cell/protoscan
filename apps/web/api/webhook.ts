@@ -1,6 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createHash, randomBytes } from 'node:crypto';
-import { createHmac } from 'node:crypto';
+import { createHash, randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -17,7 +16,12 @@ const DEFAULT_CREDITS = 100;
 function verifyPolarSignature(body: string, signature: string | undefined): boolean {
   if (!signature || !POLAR_WEBHOOK_SECRET) return false;
   const expected = createHmac('sha256', POLAR_WEBHOOK_SECRET).update(body).digest('hex');
-  return signature === expected || signature === `sha256=${expected}`;
+
+  // Constant-time comparison to prevent timing attacks
+  const sigBuf = Buffer.from(signature.replace(/^sha256=/, ''), 'utf-8');
+  const expBuf = Buffer.from(expected, 'utf-8');
+  if (sigBuf.length !== expBuf.length) return false;
+  return timingSafeEqual(sigBuf, expBuf);
 }
 
 function generateApiKey(): { key: string; hash: string; prefix: string } {
@@ -29,7 +33,7 @@ function generateApiKey(): { key: string; hash: string; prefix: string } {
 }
 
 async function supabasePost(path: string, body: unknown) {
-  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method: 'POST',
     headers: {
       'apikey': SUPABASE_KEY,
@@ -39,10 +43,15 @@ async function supabasePost(path: string, body: unknown) {
     },
     body: JSON.stringify(body),
   });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Supabase POST ${path} failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  return res.json();
 }
 
 async function supabasePatch(path: string, body: unknown) {
-  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method: 'PATCH',
     headers: {
       'apikey': SUPABASE_KEY,
@@ -52,6 +61,37 @@ async function supabasePatch(path: string, body: unknown) {
     },
     body: JSON.stringify(body),
   });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Supabase PATCH ${path} failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+async function supabaseGet(path: string) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Supabase GET ${path} failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+// Read raw body for HMAC verification (not re-serialized JSON)
+export const config = { api: { bodyParser: false } };
+
+async function readRawBody(req: VercelRequest): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    req.on('error', reject);
+  });
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -59,8 +99,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // 1. Verify webhook signature
-  const rawBody = JSON.stringify(req.body);
+  // 1. Read raw body and verify webhook signature
+  const rawBody = await readRawBody(req);
   const signature = req.headers['x-polar-signature'] as string | undefined
     ?? req.headers['webhook-signature'] as string | undefined;
 
@@ -68,8 +108,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Invalid webhook signature' });
   }
 
-  // 2. Parse Polar webhook payload
-  const event = req.body as {
+  // 2. Parse payload
+  let event: {
     type: string;
     data: {
       customer_email?: string;
@@ -80,6 +120,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       id?: string;
     };
   };
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    return res.status(400).json({ error: 'Invalid JSON' });
+  }
 
   // Only handle checkout completed events
   if (event.type !== 'checkout.completed' && event.type !== 'order.created') {
@@ -96,70 +141,56 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'No customer email in webhook payload' });
   }
 
-  // 3. Upsert user
-  const existingUserRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/users?email=eq.${encodeURIComponent(email)}&select=id`,
-    {
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-      },
-    },
-  );
-  const existingUsers = await existingUserRes.json() as Array<{ id: string }>;
+  try {
+    // 3. Upsert user
+    const existingUsers = await supabaseGet(
+      `users?email=eq.${encodeURIComponent(email)}&select=id`,
+    ) as Array<{ id: string }>;
 
-  let userId: string;
-  if (existingUsers.length > 0) {
-    userId = existingUsers[0].id;
-  } else {
-    const newUserRes = await supabasePost('users', { email });
-    const newUsers = await newUserRes.json() as Array<{ id: string }>;
-    userId = newUsers[0].id;
-  }
+    let userId: string;
+    if (existingUsers.length > 0) {
+      userId = existingUsers[0].id;
+    } else {
+      const newUsers = await supabasePost('users', { email }) as Array<{ id: string }>;
+      userId = newUsers[0].id;
+    }
 
-  // 4. Check for existing active key
-  const existingKeyRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/api_keys?user_id=eq.${userId}&revoked_at=is.null&select=id,credits_remaining`,
-    {
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-      },
-    },
-  );
-  const existingKeys = await existingKeyRes.json() as Array<{ id: string; credits_remaining: number }>;
+    // 4. Check for existing active key
+    const existingKeys = await supabaseGet(
+      `api_keys?user_id=eq.${userId}&revoked_at=is.null&select=id,credits_remaining`,
+    ) as Array<{ id: string; credits_remaining: number }>;
 
-  let apiKeyPlaintext: string | undefined;
+    if (existingKeys.length > 0) {
+      // Add credits to existing key
+      await supabasePatch(`api_keys?id=eq.${existingKeys[0].id}`, {
+        credits_remaining: existingKeys[0].credits_remaining + creditsToAdd,
+      });
+    } else {
+      // Generate new key (plaintext only exists in this scope, never returned to caller)
+      const { hash, prefix } = generateApiKey();
+      await supabasePost('api_keys', {
+        user_id: userId,
+        key_hash: hash,
+        key_prefix: prefix,
+        credits_remaining: creditsToAdd,
+      });
+      // TODO: Send API key to user via email (Resend/Postmark) instead of returning it
+    }
 
-  if (existingKeys.length > 0) {
-    // Add credits to existing key
-    await supabasePatch(`api_keys?id=eq.${existingKeys[0].id}`, {
-      credits_remaining: existingKeys[0].credits_remaining + creditsToAdd,
-    });
-  } else {
-    // Generate new key
-    const { key, hash, prefix } = generateApiKey();
-    apiKeyPlaintext = key;
-    await supabasePost('api_keys', {
+    // 5. Record payment
+    await supabasePost('payments', {
       user_id: userId,
-      key_hash: hash,
-      key_prefix: prefix,
-      credits_remaining: creditsToAdd,
+      polar_checkout_id: checkoutId,
+      amount_cents: amountCents,
+      credits_added: creditsToAdd,
+      product_id: productId,
     });
+
+    return res.status(200).json({ ok: true, credits_added: creditsToAdd });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Don't expose internal details — log server-side only
+    console.error(`Webhook processing error: ${message}`);
+    return res.status(500).json({ error: 'Webhook processing failed' });
   }
-
-  // 5. Record payment
-  await supabasePost('payments', {
-    user_id: userId,
-    polar_checkout_id: checkoutId,
-    amount_cents: amountCents,
-    credits_added: creditsToAdd,
-    product_id: productId,
-  });
-
-  return res.status(200).json({
-    ok: true,
-    credits_added: creditsToAdd,
-    ...(apiKeyPlaintext ? { api_key: apiKeyPlaintext } : {}),
-  });
 }

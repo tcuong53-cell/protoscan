@@ -6,6 +6,8 @@ const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
 
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5 MB base64 (~3.75 MB image)
+
 const SYSTEM_PROMPT = `You are a UX visual analyst. Analyze this Figma screen screenshot and identify visual UX issues.
 
 Return a JSON array of findings. Each finding has:
@@ -23,7 +25,9 @@ function hashKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
 }
 
-// Simple in-memory rate limiter (per function instance)
+// Best-effort in-memory rate limiter (per function instance).
+// Not reliable on Vercel serverless (resets on cold start) — serves as a soft guard only.
+// For production scale, move to Supabase or Vercel KV.
 const rateLimiter = new Map<string, number[]>();
 function checkRateLimit(keyId: string, rpm: number): boolean {
   const now = Date.now();
@@ -35,6 +39,9 @@ function checkRateLimit(keyId: string, rpm: number): boolean {
   rateLimiter.set(keyId, recent);
   return true;
 }
+
+// Vercel body size limit
+export const config = { api: { bodyParser: { sizeLimit: '5mb' } } };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
@@ -52,7 +59,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // 2. Validate key in Supabase
   const keyResponse = await fetch(
-    `${SUPABASE_URL}/rest/v1/api_keys?key_hash=eq.${keyHash}&revoked_at=is.null&select=id,credits_remaining,rate_limit_rpm`,
+    `${SUPABASE_URL}/rest/v1/api_keys?key_hash=eq.${encodeURIComponent(keyHash)}&revoked_at=is.null&select=id,credits_remaining,rate_limit_rpm`,
     {
       headers: {
         'apikey': SUPABASE_KEY,
@@ -60,6 +67,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     },
   );
+
+  if (!keyResponse.ok) {
+    return res.status(500).json({ error: 'Failed to validate API key' });
+  }
 
   const keys = await keyResponse.json() as Array<{
     id: string;
@@ -74,21 +85,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const apiKey = keys[0];
 
   if (apiKey.credits_remaining <= 0) {
-    return res.status(402).json({ error: 'No vision credits remaining. Purchase more at https://protoscan.dev/pricing' });
+    return res.status(402).json({ error: 'No vision credits remaining. Purchase more at https://github.com/oxxo/protoscan#pro' });
   }
 
-  // 3. Rate limit
+  // 3. Rate limit (best-effort, per-instance)
   if (!checkRateLimit(apiKey.id, apiKey.rate_limit_rpm)) {
     return res.status(429).json({ error: 'Rate limit exceeded. Try again in a minute.' });
   }
 
-  // 4. Parse request body
+  // 4. Parse and validate request body
   const { image, screenName } = req.body as { image?: string; screenName?: string };
   if (!image) {
     return res.status(400).json({ error: 'Missing "image" field (base64 PNG)' });
   }
+  if (image.length > MAX_IMAGE_SIZE) {
+    return res.status(413).json({ error: `Image too large. Max ${MAX_IMAGE_SIZE / 1024 / 1024} MB.` });
+  }
 
-  // 5. Call OpenAI with ProtoScan's key
+  // 5. Atomically decrement credits BEFORE calling OpenAI
+  const decrementRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/rpc/decrement_credits`,
+    {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_key_id: apiKey.id }),
+    },
+  );
+
+  if (!decrementRes.ok) {
+    return res.status(500).json({ error: 'Failed to process credits' });
+  }
+
+  const remaining = await decrementRes.json() as number;
+  if (remaining < 0) {
+    // Atomic check failed — no credits available (race condition prevented)
+    return res.status(402).json({ error: 'No vision credits remaining.' });
+  }
+
+  // 6. Call OpenAI with ProtoScan's key
   try {
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
     const completion = await openai.chat.completions.create({
@@ -113,24 +151,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch {
       findings = [];
     }
-
-    // 6. Decrement credits
-    await fetch(
-      `${SUPABASE_URL}/rest/v1/api_keys?id=eq.${apiKey.id}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal',
-        },
-        body: JSON.stringify({
-          credits_remaining: apiKey.credits_remaining - 1,
-          last_used_at: new Date().toISOString(),
-        }),
-      },
-    );
 
     return res.status(200).json({ findings });
   } catch (error) {
