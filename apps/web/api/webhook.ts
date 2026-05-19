@@ -126,8 +126,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Invalid JSON' });
   }
 
-  // Only handle checkout completed events
-  if (event.type !== 'checkout.completed' && event.type !== 'order.created') {
+  // Only handle order events (Polar uses order.created and order.paid)
+  if (event.type !== 'order.created' && event.type !== 'order.paid') {
     return res.status(200).json({ ok: true, skipped: true });
   }
 
