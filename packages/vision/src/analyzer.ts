@@ -184,3 +184,124 @@ export async function analyzeVision(
   console.error(`[vision] Done. ${issues.length} issues found. Estimated cost: $${totalCost.toFixed(2)}`);
   return issues;
 }
+
+// --- Proxy mode: calls ProtoScan server-side vision API instead of OpenAI directly ---
+
+export interface VisionProxyOptions {
+  protoscanApiKey: string;
+  figmaToken: string;
+  fileKey: string;
+  /** Max USD to spend. Stops after budget is reached. Default: 5 */
+  maxCost?: number;
+  /** Max screens to analyze. Default: 200 */
+  maxScreens?: number;
+  /** Vision proxy URL. Default: https://protoscan-web.vercel.app/api/vision */
+  proxyUrl?: string;
+}
+
+/**
+ * Run AI vision analysis via ProtoScan's server-side proxy.
+ * The user doesn't need an OpenAI key — ProtoScan's key is used server-side.
+ */
+export async function analyzeVisionProxy(
+  graph: PrototypeGraph,
+  options: VisionProxyOptions,
+): Promise<Issue[]> {
+  const {
+    protoscanApiKey,
+    figmaToken,
+    fileKey,
+    maxCost = 5,
+    maxScreens = 200,
+    proxyUrl = 'https://protoscan-web.vercel.app/api/vision',
+  } = options;
+
+  // Collect screen node IDs
+  const screenIds = [...graph.nodes.values()]
+    .filter((n) => n.boundingBox)
+    .slice(0, maxScreens)
+    .map((n) => n.id);
+
+  console.error(`[vision-proxy] Analyzing ${screenIds.length} screens via ProtoScan API...`);
+
+  // Fetch image URLs in batches of 50
+  const imageUrlMap = new Map<string, string>();
+  for (let i = 0; i < screenIds.length; i += IMAGES_BATCH) {
+    const batch = screenIds.slice(i, i + IMAGES_BATCH);
+    const urls = await fetchImageUrls(figmaToken, fileKey, batch);
+    for (const [id, url] of urls) imageUrlMap.set(id, url);
+    if (i + IMAGES_BATCH < screenIds.length) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  const issues: Issue[] = [];
+  let issueCounter = 0;
+  let totalCost = 0;
+  const COST_PER_SCREEN = 0.005;
+
+  for (const nodeId of screenIds) {
+    if (totalCost >= maxCost) {
+      console.error(`[vision-proxy] Cost limit $${maxCost} reached.`);
+      break;
+    }
+
+    const imgUrl = imageUrlMap.get(nodeId);
+    if (!imgUrl) continue;
+
+    const node = graph.nodes.get(nodeId)!;
+
+    try {
+      const base64 = await fetchBase64(imgUrl);
+
+      const response = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${protoscanApiKey}`,
+        },
+        body: JSON.stringify({ image: base64, screenName: node.name }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` })) as { error?: string };
+        if (response.status === 402) {
+          console.error(`[vision-proxy] No credits remaining. Purchase more at https://protoscan.dev/pricing`);
+          break;
+        }
+        throw new Error(err.error ?? `Proxy returned ${response.status}`);
+      }
+
+      const data = await response.json() as { findings: VisionFinding[] };
+      totalCost += COST_PER_SCREEN;
+
+      for (const f of data.findings) {
+        issues.push({
+          id: `vision-${++issueCounter}`,
+          category: 'vision',
+          severity: f.severity,
+          confidence: 'probable',
+          screenId: nodeId,
+          screenName: node.name,
+          nodeId,
+          message: f.message,
+          evidence: {
+            visionCategory: f.category,
+            area: f.area,
+            model: 'gpt-4o',
+            via: 'proxy',
+          },
+        });
+      }
+
+      if (data.findings.length > 0) {
+        console.error(`[vision-proxy]   ${node.name}: ${data.findings.length} issue(s)`);
+      }
+    } catch (err) {
+      console.error(`[vision-proxy]   ⚠ Skipped "${node.name}": ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  console.error(`[vision-proxy] Done. ${issues.length} issues found.`);
+  return issues;
+}

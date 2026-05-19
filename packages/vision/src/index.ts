@@ -1,1 +1,1 @@
-export { analyzeVision, type VisionOptions } from './analyzer.js';
+export { analyzeVision, analyzeVisionProxy, type VisionOptions, type VisionProxyOptions } from './analyzer.js';

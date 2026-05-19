@@ -35,7 +35,8 @@ program
   .option('--simulate', 'Run headless Playwright simulator to detect runtime nav failures (slow, requires @protoscan/simulator)')
   .option('--record [dir]', 'Record simulator walkthrough video (requires --simulate, saves .webm)')
   .option('--upload', 'Upload HTML report to GitHub Gist and return shareable URL (requires GITHUB_TOKEN)')
-  .option('--vision', 'Run AI vision analysis on each screen with GPT-4o (requires OPENAI_API_KEY and @protoscan/vision)')
+  .option('--vision', 'Run AI vision analysis on each screen with GPT-4o (requires PROTOSCAN_API_KEY or OPENAI_API_KEY)')
+  .option('--api-key <key>', 'ProtoScan API key for server-side vision (or set PROTOSCAN_API_KEY env var)')
   .option('--max-vision-cost <usd>', 'Maximum USD to spend on vision analysis', '5')
   .action(async (input: string, options) => {
     // Parse Figma URL or raw file key
@@ -110,38 +111,68 @@ program
 
       let visionIssues: Issue[] = [];
       if (options.vision) {
+        const protoscanKey = options.apiKey ?? process.env.PROTOSCAN_API_KEY;
         const openaiKey = process.env.OPENAI_API_KEY;
-        if (!openaiKey) {
-          console.error('Error: --vision requires OPENAI_API_KEY env var.');
-          process.exit(1);
-        }
         const screenCount = graph.nodes.size;
         const COST_PER_SCREEN = 0.005;
         const estimatedCost = (screenCount * COST_PER_SCREEN).toFixed(2);
         const maxCost = parseFloat(options.maxVisionCost);
-        console.error('');
-        console.error('⚠  Vision mode: screenshots of your Figma screens will be uploaded to OpenAI\'s API for analysis.');
-        console.error('   Review OpenAI\'s data usage policy at https://openai.com/policies/api-data-usage-policies');
-        console.error(`   Screens: ${screenCount} — estimated cost: ~$${estimatedCost} (cap: $${maxCost} via --max-vision-cost)`);
-        console.error('');
-        try {
-          console.error('Running AI vision analysis (this may take a few minutes)...');
-          const { analyzeVision } = await import('@protoscan/vision');
-          visionIssues = await analyzeVision(graph, {
-            figmaToken: token,
-            openaiApiKey: openaiKey,
-            fileKey,
-            maxCost,
-            maxScreens: 200,
-          });
-          console.error(`Vision: ${visionIssues.length} issue(s) found.`);
-        } catch (err: unknown) {
-          if (isModuleNotFound(err, '@protoscan/vision')) {
-            console.error('Error: --vision is not available in this distribution.');
-            console.error('   Contact support for access to ProtoScan Vision.');
-            process.exit(1);
+
+        if (protoscanKey) {
+          // Proxy mode: uses ProtoScan's OpenAI key server-side
+          console.error('');
+          console.error(`   Screens: ${screenCount} — estimated cost: ~$${estimatedCost} (cap: $${maxCost} via --max-vision-cost)`);
+          console.error('');
+          try {
+            console.error('Running AI vision analysis via ProtoScan API...');
+            const { analyzeVisionProxy } = await import('@protoscan/vision');
+            visionIssues = await analyzeVisionProxy(graph, {
+              protoscanApiKey: protoscanKey,
+              figmaToken: token,
+              fileKey,
+              maxCost,
+              maxScreens: 200,
+            });
+            console.error(`Vision: ${visionIssues.length} issue(s) found.`);
+          } catch (err: unknown) {
+            if (isModuleNotFound(err, '@protoscan/vision')) {
+              console.error('Error: --vision is not available in this distribution.');
+              console.error('   Contact support for access to ProtoScan Vision.');
+              process.exit(1);
+            }
+            throw err;
           }
-          throw err;
+        } else if (openaiKey) {
+          // BYOK mode: uses user's own OpenAI key directly
+          console.error('');
+          console.error('⚠  Vision mode (BYOK): screenshots uploaded to OpenAI\'s API with your key.');
+          console.error('   Review OpenAI\'s data usage policy at https://openai.com/policies/api-data-usage-policies');
+          console.error(`   Screens: ${screenCount} — estimated cost: ~$${estimatedCost} (cap: $${maxCost} via --max-vision-cost)`);
+          console.error('');
+          try {
+            console.error('Running AI vision analysis (this may take a few minutes)...');
+            const { analyzeVision } = await import('@protoscan/vision');
+            visionIssues = await analyzeVision(graph, {
+              figmaToken: token,
+              openaiApiKey: openaiKey,
+              fileKey,
+              maxCost,
+              maxScreens: 200,
+            });
+            console.error(`Vision: ${visionIssues.length} issue(s) found.`);
+          } catch (err: unknown) {
+            if (isModuleNotFound(err, '@protoscan/vision')) {
+              console.error('Error: --vision is not available in this distribution.');
+              console.error('   Contact support for access to ProtoScan Vision.');
+              process.exit(1);
+            }
+            throw err;
+          }
+        } else {
+          console.error('Error: --vision requires either PROTOSCAN_API_KEY or OPENAI_API_KEY.');
+          console.error('  Get a ProtoScan API key at https://github.com/oxxo/protoscan#pro');
+          console.error('  Or set OPENAI_API_KEY for direct mode (BYOK).');
+          process.exit(1);
         }
       }
 
