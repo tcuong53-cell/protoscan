@@ -134,6 +134,25 @@ protoscan/
 
 ---
 
+## Pro
+
+**ProtoScan Pro** adds server-side AI vision analysis, video recording of prototype walkthroughs, and shareable report URLs — without needing your own OpenAI API key.
+
+| Feature | Free | Pro ($29/mo) |
+|---------|:----:|:----:|
+| 7 static analyzers (dead-end, orphan, back-nav, touch target, overlap, scroll, overlay trap) | Unlimited | Unlimited |
+| E2E Playwright simulator (`--simulate`) | Unlimited | Unlimited |
+| HTML/JSON/terminal reports | Unlimited | Unlimited |
+| MCP server for Claude | Unlimited | Unlimited |
+| AI vision analysis (`--vision`) | BYOK (your OpenAI key) | Server-side (no key needed) |
+| Video recording (`--simulate --record`) | — | Included |
+| Shareable report URL (`--upload`) | — | Included |
+| AI fix suggestions per issue | — | Included |
+
+Coming soon. [Join the waitlist](https://github.com/oxxo/protoscan/issues/1) or star the repo to get notified.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE) for `@protoscan/core`, `@protoscan/cli`, `@protoscan/simulator`.  
