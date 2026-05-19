@@ -41,11 +41,20 @@ function scanPrototype(): PluginIssue[] {
   const page = figma.currentPage;
   const issues: PluginIssue[] = [];
 
-  // Collect top-level frames as screens
+  // Collect top-level frames as screens (including frames inside SECTIONs)
   const screens = new Map<string, ScreenNode>();
-  const topFrames = page.children.filter(
-    (n): n is FrameNode => n.type === 'FRAME',
-  );
+  const topFrames: Array<typeof page.children[number]> = [];
+  for (const child of page.children) {
+    if (child.type === 'FRAME') {
+      topFrames.push(child);
+    } else if (child.type === 'SECTION') {
+      for (const sectionChild of child.children) {
+        if (sectionChild.type === 'FRAME') {
+          topFrames.push(sectionChild);
+        }
+      }
+    }
+  }
   for (const frame of topFrames) {
     screens.set(frame.id, {
       id: frame.id,
@@ -200,9 +209,23 @@ function scanPrototype(): PluginIssue[] {
   return issues;
 }
 
+function countScreenFrames(): number {
+  let count = 0;
+  for (const child of figma.currentPage.children) {
+    if (child.type === 'FRAME') {
+      count++;
+    } else if (child.type === 'SECTION') {
+      for (const sc of child.children) {
+        if (sc.type === 'FRAME') count++;
+      }
+    }
+  }
+  return count;
+}
+
 function buildStats(issues: PluginIssue[]) {
   return {
-    screens: figma.currentPage.children.filter((n) => n.type === 'FRAME').length,
+    screens: countScreenFrames(),
     startingPoints: figma.currentPage.flowStartingPoints?.length ?? 0,
     totalIssues: issues.length,
     bySeverity: {
@@ -226,8 +249,17 @@ setTimeout(() => {
 // Handle messages from UI
 figma.ui.onmessage = (msg: { type: string; nodeId?: string }) => {
   if (msg.type === 'focus-node' && msg.nodeId) {
-    // Find the frame in current page children (avoids getNodeById restriction)
-    const target = figma.currentPage.children.find(function(n) { return n.id === msg.nodeId; });
+    // Find the frame in current page children or inside sections
+    var target = figma.currentPage.children.find(function(n) { return n.id === msg.nodeId; });
+    if (!target) {
+      for (var i = 0; i < figma.currentPage.children.length; i++) {
+        var sec = figma.currentPage.children[i];
+        if (sec.type === 'SECTION') {
+          var found = sec.children.find(function(n) { return n.id === msg.nodeId; });
+          if (found) { target = found; break; }
+        }
+      }
+    }
     if (target) {
       try {
         figma.viewport.scrollAndZoomIntoView([target]);
