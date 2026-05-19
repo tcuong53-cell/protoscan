@@ -1,0 +1,18 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      FIGMA_TOKEN:
+        type: string
+        description: "Figma Personal Access Token (get one at figma.com/settings)"
+    required:
+      - FIGMA_TOKEN
+  commandFunction: |-
+    (config) => ({
+      command: "npx",
+      args: ["-y", "@protoscan/mcp"],
+      env: {
+        FIGMA_TOKEN: config.FIGMA_TOKEN
+      }
+    })
