@@ -1,7 +1,7 @@
 {
   "name": "@protoscan/mcp",
-  "version": "0.0.1",
-  "description": "MCP server for ProtoScan — expose Figma prototype QA as a tool for Claude and other MCP clients.",
+  "version": "0.0.2",
+  "description": "MCP server for ProtoScan — expose Figma prototype QA as a tool for Claude and other MCP clients. Supports MCP Apps for interactive HTML reports inside Claude.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

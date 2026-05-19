@@ -25,7 +25,9 @@ const server = new McpServer(
   { capabilities: { resources: {} } },
 );
 
-// Store the latest HTML report for the UI resource to serve
+// Store the latest HTML report for the UI resource to serve.
+// Safe for stdio (single client). For remote/multi-client use, this would need
+// per-session state (e.g., keyed by request ID or session token).
 let latestReportHtml = '<html><body><p>Run a scan first.</p></body></html>';
 
 // Register the UI resource that serves the interactive HTML report
