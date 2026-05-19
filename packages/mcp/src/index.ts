@@ -1,20 +1,13 @@
 #!/usr/bin/env node
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { FigmaClient, FigmaApiError, scan, formatTerminal, formatJson } from '@protoscan/core';
-
-const ScanArgsSchema = z.object({
-  file_key: z.string().describe('Figma file key or full URL (e.g. "abc123" or "https://figma.com/design/abc123/Name?node-id=7-2")'),
-  token: z.string().optional().describe('Figma Personal Access Token. Falls back to FIGMA_TOKEN env var.'),
-  format: z.enum(['terminal', 'json']).optional().default('terminal').describe('Output format'),
-  min_touch_target: z.number().optional().default(44).describe('Minimum touch target size in px'),
-  skip: z.array(z.string()).optional().describe('Checks to skip: dead-end, orphan, back-nav, touch-target, overlap, scroll, overlay-trap'),
-});
+import { FigmaClient, FigmaApiError, scan, formatTerminal, formatJson, formatHtml } from '@protoscan/core';
+import {
+  registerAppTool,
+  registerAppResource,
+  RESOURCE_MIME_TYPE,
+} from '@modelcontextprotocol/ext-apps/server';
 
 function parseFigmaInput(input: string): { fileKey: string; pageIds: string[] } {
   const urlMatch = input.match(/figma\.com\/(?:design|file)\/([a-zA-Z0-9]+)/);
@@ -27,80 +20,97 @@ function parseFigmaInput(input: string): { fileKey: string; pageIds: string[] } 
   return { fileKey: input, pageIds: [] };
 }
 
-const server = new Server(
+const server = new McpServer(
   { name: 'protoscan', version: '0.0.1' },
-  { capabilities: { tools: {} } },
+  { capabilities: { resources: {} } },
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: 'scan_figma_prototype',
-      description:
-        'Scan a Figma file for prototype navigation issues: dead-end screens, orphan screens, missing back navigation, undersized touch targets, overlapping hotspots, missing scroll, and overlay traps. Returns a detailed report.',
-      inputSchema: {
-        type: 'object' as const,
-        properties: {
-          file_key: { type: 'string', description: 'Figma file key from the URL' },
-          token: { type: 'string', description: 'Figma PAT (optional, falls back to FIGMA_TOKEN env var)' },
-          format: { type: 'string', enum: ['terminal', 'json'], default: 'terminal' },
-          min_touch_target: { type: 'number', default: 44, description: 'Min touch target px' },
-          skip: { type: 'array', items: { type: 'string' }, description: 'Checks to skip' },
-        },
-        required: ['file_key'],
+// Store the latest HTML report for the UI resource to serve
+let latestReportHtml = '<html><body><p>Run a scan first.</p></body></html>';
+
+// Register the UI resource that serves the interactive HTML report
+registerAppResource(
+  server,
+  'ProtoScan Report',
+  'ui://protoscan/report',
+  {
+    description: 'Interactive ProtoScan scan report with severity filters and Figma deep links',
+  },
+  async () => ({
+    contents: [
+      {
+        uri: 'ui://protoscan/report',
+        mimeType: RESOURCE_MIME_TYPE,
+        text: latestReportHtml,
       },
+    ],
+  }),
+);
+
+// Register the scan tool with MCP Apps UI
+registerAppTool(
+  server,
+  'scan_figma_prototype',
+  {
+    title: 'Scan Figma Prototype',
+    description:
+      'Scan a Figma file for prototype navigation issues: dead-end screens, orphan screens, missing back navigation, undersized touch targets, overlapping hotspots, missing scroll, and overlay traps. Returns a detailed report. If the client supports MCP Apps, renders an interactive HTML report inline.',
+    inputSchema: {
+      file_key: z.string().describe('Figma file key or full URL (e.g. "abc123" or "https://figma.com/design/abc123/Name?node-id=7-2")'),
+      token: z.string().optional().describe('Figma Personal Access Token. Falls back to FIGMA_TOKEN env var.'),
+      format: z.enum(['terminal', 'json']).optional().default('terminal').describe('Output format for text response'),
+      min_touch_target: z.number().optional().default(44).describe('Minimum touch target size in px'),
+      skip: z.array(z.string()).optional().describe('Checks to skip: dead-end, orphan, back-nav, touch-target, overlap, scroll, overlay-trap'),
     },
-  ],
-}));
+    _meta: {
+      ui: { resourceUri: 'ui://protoscan/report' },
+    },
+  },
+  async (args) => {
+    const token = args.token || process.env.FIGMA_TOKEN;
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  if (request.params.name !== 'scan_figma_prototype') {
-    throw new Error(`Unknown tool: ${request.params.name}`);
-  }
+    if (!token) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: 'Error: Figma token required. Pass it as "token" parameter or set FIGMA_TOKEN env var.',
+        }],
+      };
+    }
 
-  const args = ScanArgsSchema.parse(request.params.arguments);
-  const token = args.token || process.env.FIGMA_TOKEN;
+    try {
+      const { fileKey, pageIds } = parseFigmaInput(args.file_key);
+      const client = new FigmaClient(token);
+      const file = await client.getFile(fileKey);
 
-  if (!token) {
-    return {
-      content: [{
-        type: 'text' as const,
-        text: 'Error: Figma token required. Pass it as "token" parameter or set FIGMA_TOKEN env var.',
-      }],
-      isError: true,
-    };
-  }
+      const result = await scan(file, {
+        fileKey,
+        minTouchTarget: args.min_touch_target,
+        skip: args.skip,
+        pageIds: pageIds.length ? pageIds : undefined,
+      });
 
-  try {
-    const { fileKey, pageIds } = parseFigmaInput(args.file_key);
-    const client = new FigmaClient(token);
-    const file = await client.getFile(fileKey);
+      // Update the HTML report for the MCP Apps UI resource
+      latestReportHtml = formatHtml(result);
 
-    const result = await scan(file, {
-      fileKey,
-      minTouchTarget: args.min_touch_target,
-      skip: args.skip,
-      pageIds: pageIds.length ? pageIds : undefined,
-    });
+      const output = args.format === 'json'
+        ? formatJson(result)
+        : formatTerminal(result);
 
-    const output = args.format === 'json'
-      ? formatJson(result)
-      : formatTerminal(result);
+      return {
+        content: [{ type: 'text' as const, text: output }],
+      };
+    } catch (error) {
+      const message = error instanceof FigmaApiError
+        ? error.message
+        : error instanceof Error ? error.message : String(error);
 
-    return {
-      content: [{ type: 'text' as const, text: output }],
-    };
-  } catch (error) {
-    const message = error instanceof FigmaApiError
-      ? error.message
-      : error instanceof Error ? error.message : String(error);
-
-    return {
-      content: [{ type: 'text' as const, text: `Error: ${message}` }],
-      isError: true,
-    };
-  }
-});
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${message}` }],
+      };
+    }
+  },
+);
 
 async function main() {
   const transport = new StdioServerTransport();
