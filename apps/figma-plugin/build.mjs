@@ -10,7 +10,7 @@ const codeCtx = await esbuild.context({
   entryPoints: ['src/code.ts'],
   bundle: true,
   outfile: 'dist/code.js',
-  target: 'es2020',
+  target: 'es2015',
   format: 'iife',
 });
 
@@ -27,7 +27,7 @@ const uiCtx = await esbuild.context({
   entryPoints: ['src/ui.ts'],
   bundle: true,
   outfile: 'dist/ui.js',
-  target: 'es2020',
+  target: 'es2015',
   format: 'iife',
 });
 
