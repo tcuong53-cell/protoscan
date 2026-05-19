@@ -81,6 +81,9 @@ export function formatTerminal(result: ScanResult): string {
     lines.push(colors.dim(`  Skipped checks: ${result.skippedChecks.join(', ')}`));
   }
 
+  if (summary.total > 0) {
+    lines.push(colors.dim('  ProtoScan Pro: AI vision analysis + video recording → https://protoscan.dev/pro'));
+  }
   lines.push('');
   return lines.join('\n');
 }

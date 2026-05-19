@@ -33,6 +33,8 @@ program
   .option('--skip <checks>', 'Comma-separated list of checks to skip')
   .option('--pages <ids>', 'Comma-separated page IDs to scan (default: all)')
   .option('--simulate', 'Run headless Playwright simulator to detect runtime nav failures (slow, requires @protoscan/simulator)')
+  .option('--record [dir]', 'Record simulator walkthrough video (requires --simulate, saves .webm)')
+  .option('--upload', 'Upload HTML report to GitHub Gist and return shareable URL (requires GITHUB_TOKEN)')
   .option('--vision', 'Run AI vision analysis on each screen with GPT-4o (requires OPENAI_API_KEY and @protoscan/vision)')
   .option('--max-vision-cost <usd>', 'Maximum USD to spend on vision analysis', '5')
   .action(async (input: string, options) => {
@@ -82,10 +84,18 @@ program
       let simulatorIssues: Issue[] = [];
       if (options.simulate) {
         try {
+          const recordDir = options.record === true ? '.' : (options.record || undefined);
+          if (recordDir) {
+            console.error(`Recording walkthrough video to: ${recordDir}`);
+          }
           console.error('Running simulator (this may take several minutes)...');
           const { walkPrototype } = await import('@protoscan/simulator');
-          simulatorIssues = await walkPrototype(graph, { fileKey });
+          const walkResult = await walkPrototype(graph, { fileKey, recordDir });
+          simulatorIssues = walkResult.issues;
           console.error(`Simulator: ${simulatorIssues.length} runtime issue(s) found.`);
+          if (walkResult.videoPath) {
+            console.error(`Recording saved: ${walkResult.videoPath}`);
+          }
         } catch (err: unknown) {
           if (isModuleNotFound(err, '@protoscan/simulator')) {
             console.error('Error: --simulate requires @protoscan/simulator.');
@@ -94,6 +104,8 @@ program
           }
           throw err;
         }
+      } else if (options.record) {
+        console.error('Warning: --record requires --simulate. Ignoring --record.');
       }
 
       let visionIssues: Issue[] = [];
@@ -154,6 +166,41 @@ program
         console.error(`Report written to ${options.output}`);
       } else {
         console.log(output);
+      }
+
+      // Upload HTML report to GitHub Gist if requested
+      if (options.upload) {
+        const ghToken = process.env.GITHUB_TOKEN;
+        if (!ghToken) {
+          console.error('Error: --upload requires GITHUB_TOKEN env var with gist scope.');
+          console.error('  Create one at: https://github.com/settings/tokens/new?scopes=gist');
+        } else {
+          const htmlOutput = formatHtml(result);
+          const filename = `protoscan-${result.file.key}-${Date.now()}.html`;
+          try {
+            const gistRes = await fetch('https://api.github.com/gists', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${ghToken}`,
+                'Content-Type': 'application/json',
+                'User-Agent': 'protoscan-cli',
+              },
+              body: JSON.stringify({
+                description: `ProtoScan Report — ${result.file.name}`,
+                public: false,
+                files: { [filename]: { content: htmlOutput } },
+              }),
+            });
+            if (gistRes.ok) {
+              const gist = await gistRes.json() as { html_url: string };
+              console.error(`Report uploaded: ${gist.html_url}`);
+            } else {
+              console.error(`Warning: Gist upload failed (${gistRes.status})`);
+            }
+          } catch {
+            console.error('Warning: Gist upload failed (network error)');
+          }
+        }
       }
 
       const hasBlocking = result.summary.bySeverity.critical > 0 || result.summary.bySeverity.high > 0;

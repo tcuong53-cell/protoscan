@@ -30,6 +30,14 @@ export interface WalkerOptions {
   maxScreens?: number;
   /** Timeout per navigation click in ms */
   navTimeout?: number;
+  /** Directory to save walkthrough recording video. Enables Playwright recordVideo. */
+  recordDir?: string;
+}
+
+export interface WalkResult {
+  issues: Issue[];
+  /** Path to the recorded .webm video, if --record was enabled */
+  videoPath?: string;
 }
 
 const DEFAULT_SESSION_PATH = resolve(
@@ -140,12 +148,13 @@ async function detectContentOffset(
 export async function walkPrototype(
   graph: PrototypeGraph,
   options: WalkerOptions,
-): Promise<Issue[]> {
+): Promise<WalkResult> {
   const {
     fileKey,
     sessionPath = DEFAULT_SESSION_PATH,
     maxScreens = 100,
     navTimeout = 8_000,
+    recordDir,
   } = options;
 
   const hasSession = existsSync(sessionPath);
@@ -167,6 +176,7 @@ export async function walkPrototype(
   // Large viewport so the phone mockup renders at native scale and never clips
   const context = await browser.newContext({
     viewport: { width: 800, height: 1100 },
+    ...(recordDir ? { recordVideo: { dir: recordDir, size: { width: 800, height: 1100 } } } : {}),
   });
 
   // Prevent automation detection — Figma disables ON_CLICK when navigator.webdriver is set
@@ -406,8 +416,17 @@ export async function walkPrototype(
     }
   }
 
+  // Capture video path before closing (Playwright saves video on context close)
+  let videoPath: string | undefined;
+  if (recordDir) {
+    videoPath = await page.video()?.path() ?? undefined;
+  }
+
   await browser.close();
 
   console.log(`\n[walker] Walked ${screensWalked} screens, found ${issues.length} runtime nav failures.`);
-  return issues;
+  if (videoPath) {
+    console.log(`[walker] Recording saved to: ${videoPath}`);
+  }
+  return { issues, videoPath };
 }
