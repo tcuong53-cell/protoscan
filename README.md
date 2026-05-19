@@ -63,6 +63,8 @@ Options:
   --skip <checks>              Comma-separated checks to skip
   --pages <ids>                Comma-separated page IDs to scan
   --simulate                   Run Playwright E2E simulator (slow, finds runtime bugs)
+  --record [dir]               Record simulator walkthrough video (requires --simulate)
+  --upload                     Upload HTML report to GitHub Gist (requires GITHUB_TOKEN)
   --vision                     Run GPT-4o vision analysis (requires OPENAI_API_KEY)
   --max-vision-cost <usd>      Max spend on vision analysis (default: 5)
 ```

@@ -194,8 +194,14 @@ program
             if (gistRes.ok) {
               const gist = await gistRes.json() as { html_url: string };
               console.error(`Report uploaded: ${gist.html_url}`);
+            } else if (gistRes.status === 401) {
+              console.error('Warning: Gist upload failed — GITHUB_TOKEN is invalid or expired.');
+              console.error('  Generate a new one at: https://github.com/settings/tokens/new?scopes=gist');
+            } else if (gistRes.status === 403) {
+              console.error('Warning: Gist upload failed — GITHUB_TOKEN lacks the "gist" scope.');
+              console.error('  Generate a new one at: https://github.com/settings/tokens/new?scopes=gist');
             } else {
-              console.error(`Warning: Gist upload failed (${gistRes.status})`);
+              console.error(`Warning: Gist upload failed (HTTP ${gistRes.status})`);
             }
           } catch {
             console.error('Warning: Gist upload failed (network error)');
