@@ -30,9 +30,21 @@ export const graphAnalyzer = {
   },
 };
 
+/** Build a set of node IDs that are overlay destinations */
+function getOverlayTargets(graph: PrototypeGraph): Set<string> {
+  const targets = new Set<string>();
+  for (const edges of graph.edges.values()) {
+    for (const edge of edges) {
+      if (edge.navigation === 'OVERLAY') targets.add(edge.destinationId);
+    }
+  }
+  return targets;
+}
+
 /** Screens with no outgoing edges (no way to navigate away) */
 function detectDeadEnds(graph: PrototypeGraph): Issue[] {
   const issues: Issue[] = [];
+  const overlayTargets = getOverlayTargets(graph);
 
   for (const [nodeId, node] of graph.nodes) {
     const outgoing = graph.edges.get(nodeId) ?? [];
@@ -45,15 +57,28 @@ function detectDeadEnds(graph: PrototypeGraph): Issue[] {
     const isDestination = isScreenADestination(nodeId, graph);
     if (!isDestination && !node.hasInteractions) continue;
 
+    // Smart heuristics: overlay targets close via tap-outside in Figma — not real dead-ends
+    const isOverlay = overlayTargets.has(nodeId);
+
+    // Fully disconnected frames (0 incoming, 0 outgoing, not a starting point) = spec/doc frames
+    const isDisconnected = !isDestination && !node.isFlowStartingPoint;
+
+    // Determine confidence based on heuristics
+    const confidence = isOverlay || isDisconnected || STATE_VARIANT_PATTERN.test(node.name)
+      ? 'low' as const
+      : 'certain' as const;
+
     issues.push({
       id: nextId('dead-end'),
       category: 'dead-end',
-      severity: 'critical',
-      confidence: 'certain',
+      severity: confidence === 'low' ? 'medium' : 'critical',
+      confidence,
       screenId: nodeId,
       screenName: node.name,
-      message: `Screen "${node.name}" has no outgoing interactions — users will get stuck here.`,
-      evidence: { outgoingEdges: 0, isDestination },
+      message: isOverlay
+        ? `Overlay "${node.name}" has no explicit close — users dismiss via tap-outside (likely OK).`
+        : `Screen "${node.name}" has no outgoing interactions — users will get stuck here.`,
+      evidence: { outgoingEdges: 0, isDestination, isOverlay, isDisconnected },
     });
   }
 

@@ -117,11 +117,16 @@ program
         const COST_PER_SCREEN = 0.005;
         const estimatedCost = (screenCount * COST_PER_SCREEN).toFixed(2);
         const maxCost = parseFloat(options.maxVisionCost);
+        const cappedScreens = Math.min(screenCount, Math.floor(maxCost / COST_PER_SCREEN));
+        const cappedCost = (cappedScreens * COST_PER_SCREEN).toFixed(2);
+        const etaMinutes = Math.ceil(cappedScreens / 30); // ~30 screens/min with rate limit
 
         if (protoscanKey) {
           // Proxy mode: uses ProtoScan's OpenAI key server-side
           console.error('');
-          console.error(`   Screens: ${screenCount} — estimated cost: ~$${estimatedCost} (cap: $${maxCost} via --max-vision-cost)`);
+          console.error(`   Screens: ${screenCount} total, ${cappedScreens} will be analyzed`);
+          console.error(`   Estimated cost: ~$${cappedCost} (cap: $${maxCost} via --max-vision-cost)`);
+          console.error(`   Estimated time: ~${etaMinutes} min`);
           console.error('');
           try {
             console.error('Running AI vision analysis via ProtoScan API...');
@@ -147,7 +152,9 @@ program
           console.error('');
           console.error('⚠  Vision mode (BYOK): screenshots uploaded to OpenAI\'s API with your key.');
           console.error('   Review OpenAI\'s data usage policy at https://openai.com/policies/api-data-usage-policies');
-          console.error(`   Screens: ${screenCount} — estimated cost: ~$${estimatedCost} (cap: $${maxCost} via --max-vision-cost)`);
+          console.error(`   Screens: ${screenCount} total, ${cappedScreens} will be analyzed`);
+          console.error(`   Estimated cost: ~$${cappedCost} (cap: $${maxCost} via --max-vision-cost)`);
+          console.error(`   Estimated time: ~${etaMinutes} min`);
           console.error('');
           try {
             console.error('Running AI vision analysis (this may take a few minutes)...');

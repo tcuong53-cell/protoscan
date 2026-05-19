@@ -38,11 +38,13 @@ function walkForTouchTargets(
   if (node.interactions?.length && node.absoluteBoundingBox) {
     const { width, height } = node.absoluteBoundingBox;
     if (width < minSize || height < minSize) {
+      // TEXT nodes are rarely interactive — they inherit reactions from parent containers
+      const isTextNode = node.type === 'TEXT';
       issues.push({
         id: `touch-target-${++counter}`,
         category: 'touch-target',
-        severity: 'high',
-        confidence: 'certain',
+        severity: isTextNode ? 'low' : 'high',
+        confidence: isTextNode ? 'low' : 'certain',
         screenId,
         screenName,
         nodeId: node.id,

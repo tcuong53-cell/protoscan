@@ -12,6 +12,11 @@ import { SYSTEM_PROMPT, type VisionFinding } from './prompts.js';
 
 const FIGMA_API_BASE = 'https://api.figma.com';
 const IMAGES_BATCH = 50; // Figma images API max per request
+const COST_PER_SCREEN = 0.005;
+
+// Retry config
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 5_000; // 5s initial backoff
 
 export interface VisionOptions {
   figmaToken: string;
@@ -21,6 +26,46 @@ export interface VisionOptions {
   maxCost?: number;
   /** Max screens to analyze. Default: 200 */
   maxScreens?: number;
+}
+
+/** Sleep helper */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Retry with exponential backoff on rate limit (429) or transient errors */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  onRetry?: (attempt: number, delayMs: number) => void,
+): Promise<T> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isRetryable =
+        err instanceof Error &&
+        (err.message.includes('429') ||
+          err.message.includes('Rate limit') ||
+          err.message.includes('fetch failed') ||
+          err.message.includes('ECONNRESET') ||
+          err.message.includes('503'));
+
+      if (!isRetryable || attempt === MAX_RETRIES) throw err;
+
+      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt); // 5s, 10s, 20s
+      onRetry?.(attempt + 1, delayMs);
+      await sleep(delayMs);
+    }
+  }
+  throw new Error(`${label}: max retries exceeded`);
+}
+
+/** Format elapsed time */
+function formatTime(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m${s % 60}s`;
 }
 
 /** Fetch PNG render URLs from Figma for a batch of node IDs */
@@ -78,7 +123,7 @@ async function analyzeScreen(
             type: 'image_url',
             image_url: {
               url: `data:image/png;base64,${base64Image}`,
-              detail: 'low', // cheaper, sufficient for layout/contrast analysis
+              detail: 'low',
             },
           },
         ],
@@ -114,34 +159,32 @@ export async function analyzeVision(
 
   const openai = new OpenAI({ apiKey: openaiApiKey });
 
-  // Collect screen node IDs (only screens with bounding boxes — real prototype frames)
   const screenIds = [...graph.nodes.values()]
     .filter((n) => n.boundingBox)
     .slice(0, maxScreens)
     .map((n) => n.id);
 
-  console.error(`[vision] Analyzing ${screenIds.length} screens...`);
+  const total = screenIds.length;
+  const startTime = Date.now();
+  console.error(`[vision] Analyzing ${total} screens...`);
 
-  // Fetch image URLs in batches of 50
+  // Fetch image URLs in batches
   const imageUrlMap = new Map<string, string>();
   for (let i = 0; i < screenIds.length; i += IMAGES_BATCH) {
     const batch = screenIds.slice(i, i + IMAGES_BATCH);
     const urls = await fetchImageUrls(figmaToken, fileKey, batch);
     for (const [id, url] of urls) imageUrlMap.set(id, url);
-    // Small delay to avoid Figma rate limits
-    if (i + IMAGES_BATCH < screenIds.length) {
-      await new Promise((r) => setTimeout(r, 1000));
-    }
+    if (i + IMAGES_BATCH < screenIds.length) await sleep(1000);
   }
 
   const issues: Issue[] = [];
   let issueCounter = 0;
   let totalCost = 0;
-  const COST_PER_SCREEN = 0.005; // conservative estimate
+  let analyzed = 0;
 
   for (const nodeId of screenIds) {
     if (totalCost >= maxCost) {
-      console.error(`[vision] Cost limit $${maxCost} reached — analyzed ${issueCounter} screens.`);
+      console.error(`[vision] Cost limit $${maxCost} reached after ${analyzed}/${total} screens.`);
       break;
     }
 
@@ -149,10 +192,19 @@ export async function analyzeVision(
     if (!imgUrl) continue;
 
     const node = graph.nodes.get(nodeId)!;
+    analyzed++;
 
     try {
-      const base64 = await fetchBase64(imgUrl);
-      const findings = await analyzeScreen(openai, base64, node.name);
+      const findings = await withRetry(
+        async () => {
+          const base64 = await fetchBase64(imgUrl);
+          return analyzeScreen(openai, base64, node.name);
+        },
+        node.name,
+        (attempt, delayMs) => {
+          console.error(`[vision]   ⏳ "${node.name}" rate limited, retry ${attempt}/${MAX_RETRIES} in ${delayMs / 1000}s...`);
+        },
+      );
       totalCost += COST_PER_SCREEN;
 
       for (const f of findings) {
@@ -165,23 +217,21 @@ export async function analyzeVision(
           screenName: node.name,
           nodeId,
           message: f.message,
-          evidence: {
-            visionCategory: f.category,
-            area: f.area,
-            model: 'gpt-4o',
-          },
+          evidence: { visionCategory: f.category, area: f.area, model: 'gpt-4o' },
         });
       }
 
-      if (findings.length > 0) {
-        console.error(`[vision]   ${node.name}: ${findings.length} issue(s)`);
-      }
+      const elapsed = formatTime(Date.now() - startTime);
+      const rate = analyzed / ((Date.now() - startTime) / 1000);
+      const eta = rate > 0 ? formatTime(((total - analyzed) / rate) * 1000) : '?';
+      const issueStr = findings.length > 0 ? ` → ${findings.length} issue(s)` : '';
+      console.error(`[vision] [${analyzed}/${total}] ${node.name}${issueStr} (${elapsed} elapsed, ~${eta} remaining)`);
     } catch (err) {
-      console.error(`[vision]   ⚠ Skipped "${node.name}": ${err instanceof Error ? err.message : err}`);
+      console.error(`[vision]   ⚠ Skipped "${node.name}" after ${MAX_RETRIES} retries: ${err instanceof Error ? err.message : err}`);
     }
   }
 
-  console.error(`[vision] Done. ${issues.length} issues found. Estimated cost: $${totalCost.toFixed(2)}`);
+  console.error(`[vision] Done. ${issues.length} issues found. Cost: ~$${totalCost.toFixed(2)}`);
   return issues;
 }
 
@@ -202,6 +252,7 @@ export interface VisionProxyOptions {
 /**
  * Run AI vision analysis via ProtoScan's server-side proxy.
  * The user doesn't need an OpenAI key — ProtoScan's key is used server-side.
+ * Includes retry with exponential backoff for rate limits.
  */
 export async function analyzeVisionProxy(
   graph: PrototypeGraph,
@@ -216,33 +267,32 @@ export async function analyzeVisionProxy(
     proxyUrl = 'https://web-five-beige-24.vercel.app/api/vision',
   } = options;
 
-  // Collect screen node IDs
   const screenIds = [...graph.nodes.values()]
     .filter((n) => n.boundingBox)
     .slice(0, maxScreens)
     .map((n) => n.id);
 
-  console.error(`[vision-proxy] Analyzing ${screenIds.length} screens via ProtoScan API...`);
+  const total = screenIds.length;
+  const startTime = Date.now();
+  console.error(`[vision-proxy] Analyzing ${total} screens via ProtoScan API...`);
 
-  // Fetch image URLs in batches of 50
+  // Fetch image URLs in batches
   const imageUrlMap = new Map<string, string>();
   for (let i = 0; i < screenIds.length; i += IMAGES_BATCH) {
     const batch = screenIds.slice(i, i + IMAGES_BATCH);
     const urls = await fetchImageUrls(figmaToken, fileKey, batch);
     for (const [id, url] of urls) imageUrlMap.set(id, url);
-    if (i + IMAGES_BATCH < screenIds.length) {
-      await new Promise((r) => setTimeout(r, 1000));
-    }
+    if (i + IMAGES_BATCH < screenIds.length) await sleep(1000);
   }
 
   const issues: Issue[] = [];
   let issueCounter = 0;
   let totalCost = 0;
-  const COST_PER_SCREEN = 0.005;
+  let analyzed = 0;
 
   for (const nodeId of screenIds) {
     if (totalCost >= maxCost) {
-      console.error(`[vision-proxy] Cost limit $${maxCost} reached.`);
+      console.error(`[vision-proxy] Cost limit $${maxCost} reached after ${analyzed}/${total} screens.`);
       break;
     }
 
@@ -250,29 +300,38 @@ export async function analyzeVisionProxy(
     if (!imgUrl) continue;
 
     const node = graph.nodes.get(nodeId)!;
+    analyzed++;
 
     try {
-      const base64 = await fetchBase64(imgUrl);
+      const data = await withRetry(
+        async () => {
+          const base64 = await fetchBase64(imgUrl);
+          const response = await fetch(proxyUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${protoscanApiKey}`,
+            },
+            body: JSON.stringify({ image: base64, screenName: node.name }),
+          });
 
-      const response = await fetch(proxyUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${protoscanApiKey}`,
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` })) as { error?: string };
+            if (response.status === 402) {
+              throw new Error('NO_CREDITS');
+            }
+            throw new Error(err.error ?? `Proxy returned ${response.status}`);
+          }
+
+          return response.json() as Promise<{ findings: VisionFinding[] }>;
         },
-        body: JSON.stringify({ image: base64, screenName: node.name }),
-      });
+        node.name,
+        (attempt, delayMs) => {
+          console.error(`[vision-proxy]   ⏳ "${node.name}" rate limited, retry ${attempt}/${MAX_RETRIES} in ${delayMs / 1000}s...`);
+        },
+      );
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` })) as { error?: string };
-        if (response.status === 402) {
-          console.error(`[vision-proxy] No credits remaining. Purchase more at https://protoscan.dev/pricing`);
-          break;
-        }
-        throw new Error(err.error ?? `Proxy returned ${response.status}`);
-      }
-
-      const data = await response.json() as { findings: VisionFinding[] };
+      // Check for credit exhaustion (non-retryable)
       totalCost += COST_PER_SCREEN;
 
       for (const f of data.findings) {
@@ -285,23 +344,25 @@ export async function analyzeVisionProxy(
           screenName: node.name,
           nodeId,
           message: f.message,
-          evidence: {
-            visionCategory: f.category,
-            area: f.area,
-            model: 'gpt-4o',
-            via: 'proxy',
-          },
+          evidence: { visionCategory: f.category, area: f.area, model: 'gpt-4o', via: 'proxy' },
         });
       }
 
-      if (data.findings.length > 0) {
-        console.error(`[vision-proxy]   ${node.name}: ${data.findings.length} issue(s)`);
-      }
+      const elapsed = formatTime(Date.now() - startTime);
+      const rate = analyzed / ((Date.now() - startTime) / 1000);
+      const eta = rate > 0 ? formatTime(((total - analyzed) / rate) * 1000) : '?';
+      const issueStr = data.findings.length > 0 ? ` → ${data.findings.length} issue(s)` : '';
+      console.error(`[vision-proxy] [${analyzed}/${total}] ${node.name}${issueStr} (${elapsed} elapsed, ~${eta} remaining)`);
     } catch (err) {
-      console.error(`[vision-proxy]   ⚠ Skipped "${node.name}": ${err instanceof Error ? err.message : err}`);
+      if (err instanceof Error && err.message === 'NO_CREDITS') {
+        console.error(`[vision-proxy] No credits remaining. Purchase more at https://protoscan.dev/pricing`);
+        break;
+      }
+      console.error(`[vision-proxy]   ⚠ Skipped "${node.name}" after ${MAX_RETRIES} retries: ${err instanceof Error ? err.message : err}`);
     }
   }
 
-  console.error(`[vision-proxy] Done. ${issues.length} issues found.`);
+  const elapsed = formatTime(Date.now() - startTime);
+  console.error(`[vision-proxy] Done. ${issues.length} issues in ${analyzed}/${total} screens. Cost: ~$${totalCost.toFixed(2)} (${elapsed})`);
   return issues;
 }
