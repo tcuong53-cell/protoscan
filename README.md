@@ -104,6 +104,58 @@ npx @protoscan/cli scan FILE_KEY --vision --max-vision-cost 2
 
 ---
 
+## Use with Claude (MCP)
+
+ProtoScan includes an MCP server that lets Claude scan Figma prototypes directly in the conversation — with an interactive HTML report rendered inline.
+
+### Claude Desktop / Claude Code
+
+Add to your MCP config (`claude_desktop_config.json` or via `claude mcp add`):
+
+```json
+{
+  "mcpServers": {
+    "protoscan": {
+      "command": "npx",
+      "args": ["-y", "@protoscan/mcp"],
+      "env": {
+        "FIGMA_TOKEN": "your_figma_token"
+      }
+    }
+  }
+}
+```
+
+Then ask Claude: *"Scan my Figma prototype for issues: https://www.figma.com/design/abc123/My-App"*
+
+### Use with Figma MCP (Workflow Labs)
+
+Figma's [Workflow Labs](https://help.figma.com/hc/en-us/articles/32132100833559-Guide-to-the-Figma-MCP-server) teaches a code-to-canvas workflow with MCP. ProtoScan adds a QA step: scan the prototype *before* sharing it with your team.
+
+```json
+{
+  "mcpServers": {
+    "figma": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-figma"],
+      "env": { "FIGMA_API_KEY": "your_figma_token" }
+    },
+    "protoscan": {
+      "command": "npx",
+      "args": ["-y", "@protoscan/mcp"],
+      "env": { "FIGMA_TOKEN": "your_figma_token" }
+    }
+  }
+}
+```
+
+With both MCP servers, Claude can:
+1. Read your Figma designs (Figma MCP)
+2. Scan for prototype issues (ProtoScan MCP)
+3. Tell you exactly how to fix each issue, step by step
+
+---
+
 ## CI/CD Integration
 
 ProtoScan exits with code `1` if critical or high issues are found:
