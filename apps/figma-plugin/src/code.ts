@@ -141,12 +141,8 @@ function scanPrototype(): PluginIssue[] {
     if (reachable.has(id)) continue;
     reachable.add(id);
 
-    // Find the frame for this ID — check top frames first, then getNodeById
-    let frame: SceneNode | null = topFrames.find((f) => f.id === id) ?? null;
-    if (!frame) {
-      const node = figma.getNodeById(id);
-      if (node && 'children' in node) frame = node as SceneNode;
-    }
+    // Find the top-level frame for this ID
+    const frame = topFrames.find((f: FrameNode) => f.id === id);
     if (!frame) continue;
 
     collectActions(frame, (action) => {
@@ -230,13 +226,13 @@ setTimeout(() => {
 // Handle messages from UI
 figma.ui.onmessage = (msg: { type: string; nodeId?: string }) => {
   if (msg.type === 'focus-node' && msg.nodeId) {
-    const node = figma.getNodeById(msg.nodeId);
-    // Verify node exists and hasn't been removed
-    if (node && 'type' in node && node.type !== 'DOCUMENT' && node.type !== 'PAGE') {
+    // Find the frame in current page children (avoids getNodeById restriction)
+    const target = figma.currentPage.children.find(function(n) { return n.id === msg.nodeId; });
+    if (target) {
       try {
-        figma.viewport.scrollAndZoomIntoView([node as SceneNode]);
-        figma.currentPage.selection = [node as SceneNode];
-      } catch {
+        figma.viewport.scrollAndZoomIntoView([target]);
+        figma.currentPage.selection = [target];
+      } catch (_e) {
         // Node may have been deleted — silently ignore
       }
     }
