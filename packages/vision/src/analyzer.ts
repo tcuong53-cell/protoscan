@@ -195,7 +195,7 @@ export interface VisionProxyOptions {
   maxCost?: number;
   /** Max screens to analyze. Default: 200 */
   maxScreens?: number;
-  /** Vision proxy URL. Default: https://protoscan-web.vercel.app/api/vision */
+  /** Vision proxy URL. Default: https://web-five-beige-24.vercel.app/api/vision */
   proxyUrl?: string;
 }
 
@@ -213,7 +213,7 @@ export async function analyzeVisionProxy(
     fileKey,
     maxCost = 5,
     maxScreens = 200,
-    proxyUrl = 'https://protoscan-web.vercel.app/api/vision',
+    proxyUrl = 'https://web-five-beige-24.vercel.app/api/vision',
   } = options;
 
   // Collect screen node IDs
