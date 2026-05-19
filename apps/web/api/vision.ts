@@ -154,7 +154,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({ findings });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return res.status(500).json({ error: `Vision analysis failed: ${message}` });
+    // Refund the credit since OpenAI failed — user shouldn't pay for failed analysis
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/refund_credit`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_key_id: apiKey.id }),
+    }).catch(() => {}); // best-effort refund
+
+    // Sanitize error — don't leak OpenAI internals to client
+    console.error(`Vision analysis failed for key ${apiKey.id}:`, error instanceof Error ? error.message : error);
+    return res.status(500).json({ error: 'Vision analysis failed. Please try again.' });
   }
 }

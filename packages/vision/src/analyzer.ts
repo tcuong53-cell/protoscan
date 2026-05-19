@@ -43,13 +43,15 @@ async function withRetry<T>(
     try {
       return await fn();
     } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
       const isRetryable =
-        err instanceof Error &&
-        (err.message.includes('429') ||
-          err.message.includes('Rate limit') ||
-          err.message.includes('fetch failed') ||
-          err.message.includes('ECONNRESET') ||
-          err.message.includes('503'));
+        msg !== '' &&
+        msg !== 'NO_CREDITS' &&
+        (msg.includes('429') ||
+          msg.includes('Rate limit') ||
+          msg.includes('fetch failed') ||
+          msg.includes('ECONNRESET') ||
+          msg.includes('503'));
 
       if (!isRetryable || attempt === MAX_RETRIES) throw err;
 
@@ -93,11 +95,16 @@ async function fetchImageUrls(
   return map;
 }
 
-/** Fetch image as base64 */
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB raw = ~5.3 MB base64 (within server 5MB limit)
+
+/** Fetch image as base64, skip if too large */
 async function fetchBase64(url: string): Promise<string> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
   const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > MAX_IMAGE_BYTES) {
+    throw new Error(`Image too large (${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB, max ${MAX_IMAGE_BYTES / 1024 / 1024} MB)`);
+  }
   return Buffer.from(buffer).toString('base64');
 }
 
@@ -222,10 +229,13 @@ export async function analyzeVision(
       }
 
       const elapsed = formatTime(Date.now() - startTime);
-      const rate = analyzed / ((Date.now() - startTime) / 1000);
-      const eta = rate > 0 ? formatTime(((total - analyzed) / rate) * 1000) : '?';
+      const elapsedSec = (Date.now() - startTime) / 1000;
+      const eta = analyzed >= 3 && elapsedSec > 0
+        ? formatTime(((total - analyzed) / (analyzed / elapsedSec)) * 1000)
+        : '';
+      const etaStr = eta ? `, ~${eta} remaining` : '';
       const issueStr = findings.length > 0 ? ` → ${findings.length} issue(s)` : '';
-      console.error(`[vision] [${analyzed}/${total}] ${node.name}${issueStr} (${elapsed} elapsed, ~${eta} remaining)`);
+      console.error(`[vision] [${analyzed}/${total}] ${node.name}${issueStr} (${elapsed} elapsed${etaStr})`);
     } catch (err) {
       console.error(`[vision]   ⚠ Skipped "${node.name}" after ${MAX_RETRIES} retries: ${err instanceof Error ? err.message : err}`);
     }
@@ -349,10 +359,13 @@ export async function analyzeVisionProxy(
       }
 
       const elapsed = formatTime(Date.now() - startTime);
-      const rate = analyzed / ((Date.now() - startTime) / 1000);
-      const eta = rate > 0 ? formatTime(((total - analyzed) / rate) * 1000) : '?';
+      const elapsedSec = (Date.now() - startTime) / 1000;
+      const eta = analyzed >= 3 && elapsedSec > 0
+        ? formatTime(((total - analyzed) / (analyzed / elapsedSec)) * 1000)
+        : '';
+      const etaStr = eta ? `, ~${eta} remaining` : '';
       const issueStr = data.findings.length > 0 ? ` → ${data.findings.length} issue(s)` : '';
-      console.error(`[vision-proxy] [${analyzed}/${total}] ${node.name}${issueStr} (${elapsed} elapsed, ~${eta} remaining)`);
+      console.error(`[vision-proxy] [${analyzed}/${total}] ${node.name}${issueStr} (${elapsed} elapsed${etaStr})`);
     } catch (err) {
       if (err instanceof Error && err.message === 'NO_CREDITS') {
         console.error(`[vision-proxy] No credits remaining. Purchase more at https://protoscan.dev/pricing`);
