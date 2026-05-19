@@ -25,6 +25,33 @@ function esc(str: string): string {
 }
 
 function renderResults(issues: PluginIssue[], stats: ScanStats) {
+  // Empty state: no screens found on this page
+  if (stats.screens === 0) {
+    app.innerHTML = `
+      <div class="header">
+        <h2>ProtoScan</h2>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="stat-value">0</div><div class="stat-label">Screens</div></div>
+        <div class="stat"><div class="stat-value">${stats.startingPoints}</div><div class="stat-label">Starting Points</div></div>
+        <div class="stat"><div class="stat-value">0</div><div class="stat-label">Issues</div></div>
+      </div>
+      <div class="empty">
+        <div class="empty-icon" style="color:var(--figma-color-text-secondary,#999)">?</div>
+        <div class="empty-title">No screens found</div>
+        <div class="empty-text">This page has no prototype frames. Make sure your screens are top-level frames (or inside sections).</div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="rescan-btn">Re-scan</button>
+      </div>
+      <div class="cta">
+        Get AI vision analysis + video recording with <a href="https://github.com/oxxo/protoscan#pro" target="_blank">ProtoScan Pro</a>
+      </div>
+    `;
+    document.getElementById('rescan-btn')?.addEventListener('click', rescan);
+    return;
+  }
+
   if (stats.totalIssues === 0) {
     app.innerHTML = `
       <div class="header">

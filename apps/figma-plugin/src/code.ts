@@ -13,11 +13,37 @@ interface PluginIssue {
 interface ScreenNode {
   id: string;
   name: string;
+  sectionName: string | null;
+  displayName: string;
   hasOutgoing: boolean;
   hasBackAction: boolean;
   hasCloseAction: boolean;
   isOverlayTarget: boolean;
   incomingCount: number;
+}
+
+// Collect all screen-like frames from the page, traversing into SECTIONs recursively.
+// Returns frames + components that can participate in prototype flows.
+function getTopFrames(page: PageNode): Array<{ node: SceneNode; sectionName: string | null }> {
+  const results: Array<{ node: SceneNode; sectionName: string | null }> = [];
+
+  function isScreenNode(n: SceneNode): boolean {
+    return n.type === 'FRAME' || n.type === 'COMPONENT' || n.type === 'COMPONENT_SET';
+  }
+
+  function walkChildren(children: readonly SceneNode[], sectionName: string | null) {
+    for (const child of children) {
+      if (isScreenNode(child)) {
+        results.push({ node: child, sectionName });
+      } else if (child.type === 'SECTION') {
+        // Recurse into nested sections
+        walkChildren(child.children, child.name);
+      }
+    }
+  }
+
+  walkChildren(page.children, null);
+  return results;
 }
 
 // Collect destinations from a node tree (reusable for walkNode and BFS)
@@ -41,24 +67,17 @@ function scanPrototype(): PluginIssue[] {
   const page = figma.currentPage;
   const issues: PluginIssue[] = [];
 
-  // Collect top-level frames as screens (including frames inside SECTIONs)
+  // Collect screens (frames + components, including inside SECTIONs)
+  const frameEntries = getTopFrames(page);
   const screens = new Map<string, ScreenNode>();
-  const topFrames: Array<typeof page.children[number]> = [];
-  for (const child of page.children) {
-    if (child.type === 'FRAME') {
-      topFrames.push(child);
-    } else if (child.type === 'SECTION') {
-      for (const sectionChild of child.children) {
-        if (sectionChild.type === 'FRAME') {
-          topFrames.push(sectionChild);
-        }
-      }
-    }
-  }
-  for (const frame of topFrames) {
-    screens.set(frame.id, {
-      id: frame.id,
-      name: frame.name,
+
+  for (const { node, sectionName } of frameEntries) {
+    const displayName = sectionName ? `${node.name} (in ${sectionName})` : node.name;
+    screens.set(node.id, {
+      id: node.id,
+      name: node.name,
+      sectionName,
+      displayName,
       hasOutgoing: false,
       hasBackAction: false,
       hasCloseAction: false,
@@ -103,7 +122,7 @@ function scanPrototype(): PluginIssue[] {
                 issues.push({
                   severity: 'high',
                   category: 'touch-target',
-                  screenName: screens.get(parentScreenId ?? '')?.name ?? 'Unknown',
+                  screenName: screens.get(parentScreenId ?? '')?.displayName ?? 'Unknown',
                   screenId: parentScreenId ?? node.id,
                   message: `Touch target too small: "${node.name}" is ${Math.round(n.width)}x${Math.round(n.height)}px (min 44x44)`,
                 });
@@ -125,8 +144,8 @@ function scanPrototype(): PluginIssue[] {
     }
   }
 
-  for (const frame of topFrames) {
-    walkNode(frame, frame.id);
+  for (const { node } of frameEntries) {
+    walkNode(node, node.id);
   }
 
   // Count incoming connections
@@ -142,7 +161,6 @@ function scanPrototype(): PluginIssue[] {
   }
 
   // BFS from starting points to find reachable screens
-  // Handles destinations that may not be top-level frames
   const reachable = new Set<string>();
   const queue = [...startingPointIds];
   while (queue.length > 0) {
@@ -150,26 +168,25 @@ function scanPrototype(): PluginIssue[] {
     if (reachable.has(id)) continue;
     reachable.add(id);
 
-    // Find the top-level frame for this ID
-    const frame = topFrames.find((f: FrameNode) => f.id === id);
-    if (!frame) continue;
+    const entry = frameEntries.find((e) => e.node.id === id);
+    if (!entry) continue;
 
-    collectActions(frame, (action) => {
+    collectActions(entry.node, (action) => {
       if (action.type === 'NODE' && action.destinationId) {
         queue.push(action.destinationId);
       }
     });
   }
 
-  // Detect issues with user-friendly messages
+  // Detect issues with user-friendly messages (using displayName for section context)
   for (const [id, screen] of screens) {
     if (!screen.hasOutgoing && !screen.hasBackAction && !screen.hasCloseAction) {
       issues.push({
         severity: 'critical',
         category: 'dead-end',
-        screenName: screen.name,
+        screenName: screen.displayName,
         screenId: id,
-        message: `No way out: "${screen.name}" has no links, back, or close actions`,
+        message: `No way out: "${screen.displayName}" has no links, back, or close actions`,
       });
     }
 
@@ -177,9 +194,9 @@ function scanPrototype(): PluginIssue[] {
       issues.push({
         severity: 'high',
         category: 'orphan',
-        screenName: screen.name,
+        screenName: screen.displayName,
         screenId: id,
-        message: `Unreachable: "${screen.name}" can't be reached from any starting point`,
+        message: `Unreachable: "${screen.displayName}" can't be reached from any starting point`,
       });
     }
 
@@ -187,9 +204,9 @@ function scanPrototype(): PluginIssue[] {
       issues.push({
         severity: 'medium',
         category: 'back-nav',
-        screenName: screen.name,
+        screenName: screen.displayName,
         screenId: id,
-        message: `No back button: "${screen.name}" — users can't return to previous screen`,
+        message: `No back button: "${screen.displayName}" — users can't return to previous screen`,
       });
     }
 
@@ -197,9 +214,9 @@ function scanPrototype(): PluginIssue[] {
       issues.push({
         severity: 'critical',
         category: 'overlay-trap',
-        screenName: screen.name,
+        screenName: screen.displayName,
         screenId: id,
-        message: `Overlay trap: "${screen.name}" has no close or back — users get stuck`,
+        message: `Overlay trap: "${screen.displayName}" has no close or back — users get stuck`,
       });
     }
   }
@@ -209,23 +226,9 @@ function scanPrototype(): PluginIssue[] {
   return issues;
 }
 
-function countScreenFrames(): number {
-  let count = 0;
-  for (const child of figma.currentPage.children) {
-    if (child.type === 'FRAME') {
-      count++;
-    } else if (child.type === 'SECTION') {
-      for (const sc of child.children) {
-        if (sc.type === 'FRAME') count++;
-      }
-    }
-  }
-  return count;
-}
-
 function buildStats(issues: PluginIssue[]) {
   return {
-    screens: countScreenFrames(),
+    screens: getTopFrames(figma.currentPage).length,
     startingPoints: figma.currentPage.flowStartingPoints?.length ?? 0,
     totalIssues: issues.length,
     bySeverity: {
@@ -249,21 +252,12 @@ setTimeout(() => {
 // Handle messages from UI
 figma.ui.onmessage = (msg: { type: string; nodeId?: string }) => {
   if (msg.type === 'focus-node' && msg.nodeId) {
-    // Find the frame in current page children or inside sections
-    var target = figma.currentPage.children.find(function(n) { return n.id === msg.nodeId; });
-    if (!target) {
-      for (var i = 0; i < figma.currentPage.children.length; i++) {
-        var sec = figma.currentPage.children[i];
-        if (sec.type === 'SECTION') {
-          var found = sec.children.find(function(n) { return n.id === msg.nodeId; });
-          if (found) { target = found; break; }
-        }
-      }
-    }
-    if (target) {
+    const targetId = msg.nodeId;
+    const entry = getTopFrames(figma.currentPage).find((e) => e.node.id === targetId);
+    if (entry) {
       try {
-        figma.viewport.scrollAndZoomIntoView([target]);
-        figma.currentPage.selection = [target];
+        figma.viewport.scrollAndZoomIntoView([entry.node]);
+        figma.currentPage.selection = [entry.node];
       } catch (_e) {
         // Node may have been deleted — silently ignore
       }
