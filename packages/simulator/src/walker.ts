@@ -8,7 +8,7 @@
  * Coordinate mapping:
  *   The prototype renders inside a device mockup (phone frame) which offsets
  *   the actual screen content within the browser canvas. We detect this offset
- *   once via screenshot analysis after the first load, then apply it to all clicks:
+ *   via screenshot analysis, then apply it to all clicks:
  *     canvasX = contentOffsetX + (element.x - frame.x + element.width  / 2)
  *     canvasY = contentOffsetY + (element.y - frame.y + element.height / 2)
  *
@@ -49,23 +49,32 @@ const PROTO_BASE = 'https://www.figma.com/proto';
 /** Triggers that map to a single tap/click gesture */
 const TAPPABLE_TRIGGERS = new Set(['ON_CLICK', 'ON_PRESS', 'MOUSE_DOWN']);
 
+// Offset detection config
+const OFFSET_MAX_RETRIES = 3;
+const OFFSET_RETRY_DELAY_MS = 2_000;
+
+// Settle config
+const SETTLE_FLOOR_MS = 2_000;
+const SETTLE_CEILING_MS = 5_000; // increased from 3s to 5s
+const STABILITY_CHECK_INTERVAL_MS = 600;
+const STABILITY_CHECK_MAX_ATTEMPTS = 3;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /**
- * Detect the pixel offset of the prototype screen content within the browser
- * viewport by analysing a Playwright screenshot (PNG).
- *
- * The prototype viewer renders a device mockup frame (phone bezel) around the
- * actual screen content. Outside the phone there is pure black (#000000).
- * We scan inward from the edges to find where non-black content begins.
+ * Decode a PNG screenshot into raw RGBA pixel data.
+ * Validates IHDR: bit depth must be 8, color type must be 6 (RGBA).
  */
-async function detectContentOffset(
+function decodePngToRgba(
   screenshotBuf: Buffer,
-): Promise<{ x: number; y: number }> {
-  // ---- Minimal PNG decoder ----
-  // 8-byte signature, then chunks: [4 len][4 type][N data][4 CRC]
-  let pos = 8;
+): { pixels: Uint8Array; width: number; height: number } {
+  let pos = 8; // skip PNG signature
   const idatChunks: Buffer[] = [];
   let imgWidth = 0;
   let imgHeight = 0;
+  let bytesPerPixel = 4; // default RGBA, updated from IHDR
 
   while (pos < screenshotBuf.length - 8) {
     const len = screenshotBuf.readUInt32BE(pos); pos += 4;
@@ -75,6 +84,13 @@ async function detectContentOffset(
     if (type === 'IHDR') {
       imgWidth  = data.readUInt32BE(0);
       imgHeight = data.readUInt32BE(4);
+      // Fix 5: Validate color format — accept RGB (2) and RGBA (6)
+      const bitDepth = data[8];
+      const colorType = data[9];
+      if (bitDepth !== 8 || (colorType !== 6 && colorType !== 2)) {
+        throw new Error(`Unsupported PNG format: bitDepth=${bitDepth} colorType=${colorType} (expected 8-bit RGB or RGBA)`);
+      }
+      bytesPerPixel = colorType === 6 ? 4 : 3;
     } else if (type === 'IDAT') {
       idatChunks.push(data);
     } else if (type === 'IEND') {
@@ -82,9 +98,9 @@ async function detectContentOffset(
     }
   }
 
-  const rowBytes = imgWidth * 4; // RGBA
+  const rowBytes = imgWidth * bytesPerPixel;
   const raw = inflateSync(Buffer.concat(idatChunks));
-  const pixels = new Uint8Array(imgWidth * imgHeight * 4);
+  const pixels = new Uint8Array(imgWidth * imgHeight * bytesPerPixel);
   const prev = new Uint8Array(rowBytes);
 
   const paeth = (a: number, b: number, c: number): number => {
@@ -100,9 +116,9 @@ async function detectContentOffset(
 
     for (let x = 0; x < rowBytes; x++) {
       const byte = raw[srcBase + 1 + x];
-      const L = x >= 4 ? dst[x - 4] : 0;
+      const L = x >= bytesPerPixel ? dst[x - bytesPerPixel] : 0;
       const U = prev[x];
-      const UL = x >= 4 ? prev[x - 4] : 0;
+      const UL = x >= bytesPerPixel ? prev[x - bytesPerPixel] : 0;
       switch (filter) {
         case 0: dst[x] = byte; break;
         case 1: dst[x] = (byte + L) & 0xff; break;
@@ -115,34 +131,136 @@ async function detectContentOffset(
     prev.set(dst);
   }
 
-  // isBackground: pure black background + dark device bezels (all channels < 50)
-  // Screen content is always significantly brighter (white, teal, colors, etc.)
-  const isBackground = (x: number, y: number): boolean => {
-    const i = (y * imgWidth + x) * 4;
-    return pixels[i] < 50 && pixels[i + 1] < 50 && pixels[i + 2] < 50;
+  return { pixels, width: imgWidth, height: imgHeight, bytesPerPixel };
+}
+
+/**
+ * Detect the pixel offset of the prototype screen content within the browser
+ * viewport by analysing decoded RGBA pixels.
+ *
+ * Scans inward from edges to find where non-background content begins.
+ * Uses brightness threshold AND edge transition detection for robustness.
+ */
+function detectOffsetFromPixels(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  bpp: number = 4,
+): { x: number; y: number } {
+  const brightness = (x: number, y: number): number => {
+    const i = (y * width + x) * bpp;
+    return Math.max(pixels[i], pixels[i + 1], pixels[i + 2]);
   };
 
-  // Scan from left at multiple rows to find leftmost non-black
+  // Strategy: scan from edge inward, looking for a brightness jump > 60
+  // This handles dark-themed UIs where content pixels are still < 50 but brighter
+  // than the pure-black (0-5) Figma viewer background.
+
+  // Scan from left
   let offsetX = 0;
-  outer:
-  for (let x = 0; x < imgWidth; x++) {
-    for (const yFrac of [0.3, 0.5, 0.7]) {
-      const y = Math.floor(imgHeight * yFrac);
-      if (!isBackground(x, y)) { offsetX = x; break outer; }
+  for (let x = 1; x < width - 1; x++) {
+    let found = false;
+    for (const yFrac of [0.3, 0.4, 0.5, 0.6, 0.7]) {
+      const y = Math.floor(height * yFrac);
+      const curr = brightness(x, y);
+      const prev = brightness(x - 1, y);
+      // Either absolute brightness or a sharp edge transition
+      if (curr >= 50 || (curr - prev > 40)) {
+        offsetX = x;
+        found = true;
+        break;
+      }
     }
+    if (found) break;
   }
 
-  // Scan from top at multiple columns to find topmost non-black
+  // Scan from top
   let offsetY = 0;
-  outer:
-  for (let y = 0; y < imgHeight; y++) {
-    for (const xFrac of [0.3, 0.5, 0.7]) {
-      const x = Math.floor(imgWidth * xFrac);
-      if (!isBackground(x, y)) { offsetY = y; break outer; }
+  for (let y = 1; y < height - 1; y++) {
+    let found = false;
+    for (const xFrac of [0.3, 0.4, 0.5, 0.6, 0.7]) {
+      const x = Math.floor(width * xFrac);
+      const curr = brightness(x, y);
+      const prev = brightness(x, y - 1);
+      if (curr >= 50 || (curr - prev > 40)) {
+        offsetY = y;
+        found = true;
+        break;
+      }
     }
+    if (found) break;
   }
 
   return { x: offsetX, y: offsetY };
+}
+
+/**
+ * Take a screenshot and detect content offset.
+ * Retries with delay if offset is (0,0) — likely means canvas hasn't painted yet.
+ */
+async function detectContentOffsetWithRetry(
+  page: { screenshot: () => Promise<Buffer> },
+): Promise<{ x: number; y: number }> {
+  for (let attempt = 0; attempt < OFFSET_MAX_RETRIES; attempt++) {
+    const shot = await page.screenshot();
+    const { pixels, width, height, bytesPerPixel } = decodePngToRgba(shot);
+    const offset = detectOffsetFromPixels(pixels, width, height, bytesPerPixel);
+
+    // Fix 2: (0,0) on 800x1100 viewport is almost certainly wrong — retry
+    if (offset.x > 0 || offset.y > 0) {
+      return offset;
+    }
+
+    if (attempt < OFFSET_MAX_RETRIES - 1) {
+      console.log(`[walker]   ⏳ Offset (0,0) — canvas may not be painted, retry ${attempt + 1}/${OFFSET_MAX_RETRIES}...`);
+      await sleep(OFFSET_RETRY_DELAY_MS);
+    }
+  }
+
+  // Last resort: return (0,0) but log a warning
+  console.log(`[walker]   ⚠ Could not detect content offset after ${OFFSET_MAX_RETRIES} attempts — using (0,0)`);
+  return { x: 0, y: 0 };
+}
+
+/**
+ * Wait for canvas to stabilize by comparing two screenshots.
+ * Returns when consecutive screenshots are identical (canvas stopped painting).
+ */
+async function waitForCanvasStability(
+  page: { screenshot: () => Promise<Buffer>; waitForTimeout: (ms: number) => Promise<void> },
+): Promise<void> {
+  let prevHash = '';
+  for (let i = 0; i < STABILITY_CHECK_MAX_ATTEMPTS; i++) {
+    const shot = await page.screenshot();
+    // Simple hash: sum of every 1000th pixel value
+    let hash = 0;
+    for (let j = 0; j < shot.length; j += 1000) {
+      hash = (hash * 31 + shot[j]) | 0;
+    }
+    const hashStr = String(hash);
+    if (hashStr === prevHash && prevHash !== '') {
+      return; // Canvas is stable
+    }
+    prevHash = hashStr;
+    if (i < STABILITY_CHECK_MAX_ATTEMPTS - 1) {
+      await page.waitForTimeout(STABILITY_CHECK_INTERVAL_MS);
+    }
+  }
+}
+
+/**
+ * Combined settle: wait for network + stability check.
+ */
+async function settleAndStabilize(
+  page: { waitForLoadState: (s: string) => Promise<void>; waitForTimeout: (ms: number) => Promise<void>; screenshot: () => Promise<Buffer> },
+): Promise<void> {
+  // Phase 1: network settle with ceiling
+  await Promise.race([
+    page.waitForLoadState('networkidle').then(() => page.waitForTimeout(SETTLE_FLOOR_MS)).catch(() => {}),
+    page.waitForTimeout(SETTLE_CEILING_MS),
+  ]);
+  // Phase 2: screenshot stability check
+  await waitForCanvasStability(page);
 }
 
 export async function walkPrototype(
@@ -214,8 +332,6 @@ export async function walkPrototype(
   let screensWalked = 0;
 
   // Map each screen to the flow starting point that can reach it
-  // Needed so each screen uses the correct starting-point-node-id (which determines
-  // which device frame Figma renders)
   const nodeToFlow = new Map<string, string>();
   for (const sp of graph.startingPoints) {
     const q = [sp.nodeId];
@@ -230,7 +346,8 @@ export async function walkPrototype(
   }
 
   // Detected content offset per flow (keyed by starting point nodeId)
-  const flowOffsets = new Map<string, { x: number; y: number }>();
+  // Fix 2: null means "not yet detected" — we re-attempt on each screen until valid
+  const flowOffsets = new Map<string, { x: number; y: number } | null>();
 
   // BFS from all flow starting points
   const visited = new Set<string>();
@@ -255,7 +372,8 @@ export async function walkPrototype(
     const flowSpId = nodeToFlow.get(currentId) ?? graph.startingPoints[0]?.nodeId;
     console.log(`[walker] Screen ${screensWalked}: "${currentNode.name}" (${currentId}) flow="${flowSpId}"`);
     const spParam = flowSpId ? `&starting-point-node-id=${flowSpId.replace(':', '-')}` : '';
-    const protoUrl = `${PROTO_BASE}/${fileKey}/?node-id=${nodeIdUrl}&scaling=min-zoom&hide-ui=1${spParam}`;
+    // Fix 4: scaling=contain instead of min-zoom for reliable 1:1 pixel mapping
+    const protoUrl = `${PROTO_BASE}/${fileKey}/?node-id=${nodeIdUrl}&scaling=contain&hide-ui=1${spParam}`;
     try {
       await page.goto(protoUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 });
       await page.waitForSelector('canvas', { timeout: 15_000 });
@@ -264,47 +382,49 @@ export async function walkPrototype(
       continue;
     }
 
-    // Settle time — race networkidle against 3s ceiling (Figma has a persistent WebSocket
-    // that prevents bare networkidle from ever resolving; the race gives it a chance to
-    // settle faster on fast connections while guaranteeing at least 2s for interaction zones).
-    await Promise.race([
-      page.waitForLoadState('networkidle').then(() => page.waitForTimeout(2_000)).catch(() => {}),
-      page.waitForTimeout(3_000),
-    ]);
+    // Settle + canvas stability check
+    await settleAndStabilize(page);
 
     // All outgoing NAVIGATE edges (to queue non-tappable destinations too)
     const allNavEdges = (graph.edges.get(currentId) ?? []).filter(
       (e) => e.navigation === 'NAVIGATE' && !visited.has(e.destinationId),
     );
-    // Queue ALL navigate destinations (auto-transitions included) for graph coverage
+    // Queue ALL navigate destinations for graph coverage
     for (const e of allNavEdges) {
       if (!visited.has(e.destinationId)) queue.push(e.destinationId);
     }
     // Only CLICK tappable triggers
     const edges = allNavEdges.filter((e) => TAPPABLE_TRIGGERS.has(e.trigger));
 
-    // Detect content offset for this flow from first screen that has tappable edges
+    // Detect content offset — retry if (0,0), re-detect if not yet cached
     const flowKey = flowSpId ?? 'default';
-    if (!flowOffsets.has(flowKey) && edges.length > 0) {
-      const shot = await page.screenshot();
-      const detected = await detectContentOffset(shot);
-      flowOffsets.set(flowKey, detected);
-      console.log(`[walker] Content offset for flow "${flowSpId}": (${detected.x}, ${detected.y})`);
+    const cachedOffset = flowOffsets.get(flowKey);
+    if ((!cachedOffset || (cachedOffset.x === 0 && cachedOffset.y === 0)) && edges.length > 0) {
+      const detected = await detectContentOffsetWithRetry(page);
+      // Only cache if valid (non-zero)
+      if (detected.x > 0 || detected.y > 0) {
+        flowOffsets.set(flowKey, detected);
+        console.log(`[walker] Content offset for flow "${flowSpId}": (${detected.x}, ${detected.y})`);
+      } else {
+        // Mark as attempted but failed — will retry on next screen
+        flowOffsets.set(flowKey, null);
+      }
     }
 
-    // AFTER_TIMEOUT destinations for this screen — used to detect false positives where
-    // a timeout fires during the click wait and we mistake it for a click-caused navigation.
+    // AFTER_TIMEOUT destinations
     const timeoutDestIds = new Set(
       (graph.edges.get(currentId) ?? [])
         .filter((e) => e.trigger === 'AFTER_TIMEOUT')
         .map((e) => e.destinationId),
     );
 
-    // Deduplicate by destination (only click the first element that goes to each dest)
+    // Deduplicate by destination
     const edgesByDest = new Map<string, GraphEdge>();
     for (const edge of edges) {
       if (!edgesByDest.has(edge.destinationId)) edgesByDest.set(edge.destinationId, edge);
     }
+
+    const contentOffset = flowOffsets.get(flowKey) ?? { x: 0, y: 0 };
 
     for (const [destId, edge] of edgesByDest) {
       const destNode = graph.nodes.get(destId);
@@ -315,15 +435,10 @@ export async function walkPrototype(
       const { x: ex, y: ey, width: ew, height: eh } = edge.sourceElementBoundingBox as BoundingBox;
       const frameX = ex - frameBox.x + ew / 2;
       const frameY = ey - frameBox.y + eh / 2;
-      const contentOffset = flowOffsets.get(flowKey) ?? { x: 0, y: 0 };
       const clickX = contentOffset.x + frameX;
       const clickY = contentOffset.y + frameY;
 
-      // Re-navigate to current screen before each click.
-      // Skip goto if already on the correct screen (first iteration after outer load,
-      // or after a failed click that left us on the same URL).
-      // Guards: wrap page.url() in try-catch (context may be closed), and always
-      // re-navigate if the previous click may have changed the URL.
+      // Re-navigate to current screen before each click if needed
       let alreadyHere = false;
       try {
         const currentNodeParam = new URL(page.url()).searchParams.get('node-id');
@@ -339,10 +454,8 @@ export async function walkPrototype(
         }
       }
 
-      await Promise.race([
-        page.waitForLoadState('networkidle').then(() => page.waitForTimeout(2_000)).catch(() => {}),
-        page.waitForTimeout(3_000),
-      ]);
+      // Fix 3: settle + canvas stability check before click
+      await settleAndStabilize(page);
 
       console.log(`[walker]   → click (${Math.round(clickX)}, ${Math.round(clickY)}) → "${destNode.name}"`);
 
@@ -383,8 +496,6 @@ export async function walkPrototype(
         });
         console.log(`[walker]   ✗ No navigation (expected "${destNode.name}")`);
       } else if (actualNodeId !== destId) {
-        // If the actual destination is an AFTER_TIMEOUT destination of this screen,
-        // the timeout fired during the click wait — result is inconclusive, skip reporting.
         if (timeoutDestIds.has(actualNodeId)) {
           console.log(`[walker]   ⚠ Navigation to "${graph.nodes.get(actualNodeId)?.name ?? actualNodeId}" matches AFTER_TIMEOUT — inconclusive (timeout race), skipping`);
         } else {
