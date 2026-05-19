@@ -1,5 +1,5 @@
 /**
- * Quick runner: walks a real project prototype and prints any runtime nav failures.
+ * Quick runner: walks a Figma prototype and prints any runtime nav failures.
  * Usage: FIGMA_TOKEN=... npx tsx src/run.ts
  */
 import { FigmaClient, buildGraph } from '@protoscan/core';
