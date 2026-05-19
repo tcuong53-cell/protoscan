@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 12px;
+    color: var(--figma-color-text, #333);
+    background: var(--figma-color-bg, #fff);
+    padding: 12px;
+  }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .header h2 { font-size: 14px; font-weight: 600; }
+  .stats { display: flex; gap: 8px; margin-bottom: 12px; }
+  .stat {
+    flex: 1; padding: 8px; border-radius: 6px; text-align: center;
+    background: var(--figma-color-bg-secondary, #f5f5f5);
+  }
+  .stat-value { font-size: 18px; font-weight: 700; }
+  .stat-label { font-size: 10px; color: var(--figma-color-text-secondary, #999); margin-top: 2px; }
+  .stat.critical .stat-value { color: #ef4444; }
+  .stat.high .stat-value { color: #f59e0b; }
+  .stat.clean .stat-value { color: #22c55e; }
+  .issues { max-height: 280px; overflow-y: auto; }
+  .issue {
+    padding: 8px; margin-bottom: 6px; border-radius: 6px; cursor: pointer;
+    background: var(--figma-color-bg-secondary, #f5f5f5);
+    border-left: 3px solid #999;
+    transition: background 0.15s;
+  }
+  .issue:hover { background: var(--figma-color-bg-hover, #eee); }
+  .issue.critical { border-left-color: #ef4444; }
+  .issue.high { border-left-color: #f59e0b; }
+  .issue.medium { border-left-color: #3b82f6; }
+  .issue.low { border-left-color: #9ca3af; }
+  .issue-header { display: flex; justify-content: space-between; align-items: center; }
+  .issue-severity {
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    padding: 1px 5px; border-radius: 3px; color: white;
+  }
+  .issue-severity.critical { background: #ef4444; }
+  .issue-severity.high { background: #f59e0b; }
+  .issue-severity.medium { background: #3b82f6; }
+  .issue-severity.low { background: #9ca3af; }
+  .issue-category { font-size: 10px; color: var(--figma-color-text-secondary, #999); }
+  .issue-message { margin-top: 4px; line-height: 1.4; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 6px 12px; border-radius: 6px; font-size: 11px; font-weight: 500;
+    border: none; cursor: pointer; transition: background 0.15s;
+  }
+  .btn-primary { background: #6366f1; color: white; }
+  .btn-primary:hover { background: #4f46e5; }
+  .btn-secondary { background: var(--figma-color-bg-secondary, #f5f5f5); color: var(--figma-color-text, #333); }
+  .btn-secondary:hover { background: var(--figma-color-bg-hover, #eee); }
+  .actions { display: flex; gap: 8px; margin-top: 12px; }
+  .cta {
+    margin-top: 12px; padding: 8px; border-radius: 6px; text-align: center;
+    background: var(--figma-color-bg-secondary, #f5f5f5); font-size: 11px;
+  }
+  .cta a { color: #6366f1; text-decoration: none; font-weight: 500; }
+  .cta a:hover { text-decoration: underline; }
+  .empty { text-align: center; padding: 32px 16px; }
+  .empty-icon { font-size: 32px; margin-bottom: 8px; }
+  .empty-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .empty-text { color: var(--figma-color-text-secondary, #999); }
+  .loading { text-align: center; padding: 48px; color: var(--figma-color-text-secondary, #999); }
+</style>
+</head>
+<body>
+  <div id="app"><div class="loading">Scanning prototype...</div></div>
+  <!-- INLINE_SCRIPT -->
+</body>
+</html>

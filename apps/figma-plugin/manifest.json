@@ -1,0 +1,13 @@
+{
+  "name": "ProtoScan — Prototype QA",
+  "id": "protoscan-prototype-qa",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"]
+  },
+  "permissions": ["currentuser"]
+}
