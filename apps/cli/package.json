@@ -1,6 +1,6 @@
 {
   "name": "@protoscan/cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "CLI tool for automated Figma prototype QA.",
   "type": "module",
   "bin": {
@@ -17,11 +17,11 @@
     "access": "public"
   },
   "dependencies": {
-    "@protoscan/core": "0.1.1",
+    "@protoscan/core": "0.1.2",
     "commander": "^13.1.0"
   },
   "optionalDependencies": {
-    "@protoscan/simulator": "0.1.1"
+    "@protoscan/simulator": "0.1.2"
   },
   "license": "MIT",
   "engines": {
