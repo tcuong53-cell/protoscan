@@ -12,3 +12,4 @@ report*.html
 .panel/
 private/
 recordings/
+figma-session.json
