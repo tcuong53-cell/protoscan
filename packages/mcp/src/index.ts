@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { FigmaClient, FigmaApiError, scan, buildGraph, formatTerminal, formatJson, formatHtml } from '@protoscan/core';
+import { FigmaClient, FigmaApiError, scan, buildGraph, formatTerminal, formatJson, formatHtml, validateLicenseKey } from '@protoscan/core';
 import type { Issue } from '@protoscan/core';
 import {
   registerAppTool,
@@ -96,8 +96,9 @@ registerAppTool(
       let videoPath: string | undefined;
       if (args.simulate) {
         const proKey = process.env.PROTOSCAN_API_KEY;
-        if (!proKey) {
-          console.error('[protoscan] simulate requires PROTOSCAN_API_KEY — skipping, running static analysis only');
+        const license = proKey ? await validateLicenseKey(proKey) : { valid: false };
+        if (!proKey || !license.valid) {
+          console.error(`[protoscan] simulate requires valid PROTOSCAN_API_KEY — ${!proKey ? 'not set' : 'invalid key'}`);
         } else {
           try {
             const { walkPrototype } = await import('@protoscan/simulator');

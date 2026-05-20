@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { program } from 'commander';
-import { FigmaClient, FigmaApiError, scan, formatJson, formatTerminal, formatHtml, buildGraph, type Issue } from '@protoscan/core';
+import { FigmaClient, FigmaApiError, scan, formatJson, formatTerminal, formatHtml, buildGraph, validateLicenseKey, type Issue } from '@protoscan/core';
 import { writeFileSync, existsSync } from 'node:fs';
 
 program
@@ -92,6 +92,11 @@ program
           console.error('  Get your key at: https://protoscan.dev/pro');
           console.error('');
           console.error('  Static analysis will continue without simulation.');
+          console.error('');
+        } else if (!(await validateLicenseKey(proKey)).valid) {
+          console.error('');
+          console.error('  ⚠ Invalid or expired PROTOSCAN_API_KEY.');
+          console.error('  Renew at: https://protoscan.dev/pro');
           console.error('');
         } else {
           try {
