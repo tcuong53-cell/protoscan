@@ -1,6 +1,7 @@
 // ProtoScan Figma Plugin — Prototype QA
 // Runs inside Figma's sandbox. No Node.js, no fetch, no external deps.
 // Accesses the Figma document directly via the Plugin API.
+// 7 checks: dead-end, orphan, back-nav, overlay-trap, touch-target, overlap, scroll
 
 interface PluginIssue {
   severity: 'critical' | 'high' | 'medium' | 'low';
@@ -22,21 +23,25 @@ interface ScreenNode {
   incomingCount: number;
 }
 
+interface InteractiveElement {
+  nodeId: string;
+  nodeName: string;
+  screenId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 // Collect all screen-like frames from the page, traversing into SECTIONs recursively.
-// Returns frames + components that can participate in prototype flows.
 function getTopFrames(page: PageNode): Array<{ node: SceneNode; sectionName: string | null }> {
   const results: Array<{ node: SceneNode; sectionName: string | null }> = [];
 
-  function isScreenNode(n: SceneNode): boolean {
-    return n.type === 'FRAME' || n.type === 'COMPONENT' || n.type === 'COMPONENT_SET';
-  }
-
   function walkChildren(children: readonly SceneNode[], sectionName: string | null) {
     for (const child of children) {
-      if (isScreenNode(child)) {
+      if (child.type === 'FRAME' || child.type === 'COMPONENT' || child.type === 'COMPONENT_SET') {
         results.push({ node: child, sectionName });
       } else if (child.type === 'SECTION') {
-        // Recurse into nested sections
         walkChildren(child.children, child.name);
       }
     }
@@ -46,7 +51,7 @@ function getTopFrames(page: PageNode): Array<{ node: SceneNode; sectionName: str
   return results;
 }
 
-// Collect destinations from a node tree (reusable for walkNode and BFS)
+// Collect all actions from a node tree
 function collectActions(node: SceneNode, callback: (action: Action) => void) {
   if ('reactions' in node && node.reactions) {
     for (const reaction of node.reactions) {
@@ -67,36 +72,28 @@ function scanPrototype(): PluginIssue[] {
   const page = figma.currentPage;
   const issues: PluginIssue[] = [];
 
-  // Collect screens (frames + components, including inside SECTIONs)
   const frameEntries = getTopFrames(page);
   const screens = new Map<string, ScreenNode>();
 
   for (const { node, sectionName } of frameEntries) {
     const displayName = sectionName ? `${node.name} (in ${sectionName})` : node.name;
     screens.set(node.id, {
-      id: node.id,
-      name: node.name,
-      sectionName,
-      displayName,
-      hasOutgoing: false,
-      hasBackAction: false,
-      hasCloseAction: false,
-      isOverlayTarget: false,
-      incomingCount: 0,
+      id: node.id, name: node.name, sectionName, displayName,
+      hasOutgoing: false, hasBackAction: false, hasCloseAction: false,
+      isOverlayTarget: false, incomingCount: 0,
     });
   }
 
   // Collect flow starting points
   const startingPointIds = new Set<string>();
   if (page.flowStartingPoints) {
-    for (const sp of page.flowStartingPoints) {
-      startingPointIds.add(sp.nodeId);
-    }
+    for (const sp of page.flowStartingPoints) startingPointIds.add(sp.nodeId);
   }
 
-  // Walk all nodes and collect reactions (prototype connections)
+  // Walk all nodes: collect reactions, touch targets, interactive elements for overlap
   const overlayTargets = new Set<string>();
   const destinationIds = new Set<string>();
+  const interactiveElements: InteractiveElement[] = [];
 
   function walkNode(node: SceneNode, parentScreenId: string | null) {
     if ('reactions' in node && node.reactions) {
@@ -104,7 +101,6 @@ function scanPrototype(): PluginIssue[] {
         const actions = reaction.actions ?? (reaction.action ? [reaction.action] : []);
         for (const action of actions) {
           if (!action) continue;
-
           const screenData = parentScreenId ? screens.get(parentScreenId) : null;
 
           if (action.type === 'NODE' && action.destinationId) {
@@ -115,16 +111,22 @@ function scanPrototype(): PluginIssue[] {
               overlayTargets.add(action.destinationId);
             }
 
-            // Check touch target size — only on nodes with explicit dimensions
-            if ('width' in node && 'height' in node) {
-              const n = node as SceneNode & { width: number; height: number };
-              if (n.width < 44 || n.height < 44) {
+            // Track interactive element for overlap + touch-target checks
+            if ('absoluteBoundingBox' in node && node.absoluteBoundingBox) {
+              const bb = node.absoluteBoundingBox as { x: number; y: number; width: number; height: number };
+              interactiveElements.push({
+                nodeId: node.id, nodeName: node.name,
+                screenId: parentScreenId ?? node.id,
+                x: bb.x, y: bb.y, width: bb.width, height: bb.height,
+              });
+
+              // Touch target check
+              if (bb.width < 44 || bb.height < 44) {
                 issues.push({
-                  severity: 'high',
-                  category: 'touch-target',
+                  severity: 'high', category: 'touch-target',
                   screenName: screens.get(parentScreenId ?? '')?.displayName ?? 'Unknown',
                   screenId: parentScreenId ?? node.id,
-                  message: `Touch target too small: "${node.name}" is ${Math.round(n.width)}x${Math.round(n.height)}px (min 44x44)`,
+                  message: `"${node.name}" is ${Math.round(bb.width)}x${Math.round(bb.height)}px (minimum: 44x44px)`,
                 });
               }
             }
@@ -144,79 +146,119 @@ function scanPrototype(): PluginIssue[] {
     }
   }
 
-  for (const { node } of frameEntries) {
-    walkNode(node, node.id);
-  }
+  for (const { node } of frameEntries) walkNode(node, node.id);
 
   // Count incoming connections
   for (const destId of destinationIds) {
     const screen = screens.get(destId);
     if (screen) screen.incomingCount++;
   }
-
-  // Mark overlay targets
   for (const targetId of overlayTargets) {
     const screen = screens.get(targetId);
     if (screen) screen.isOverlayTarget = true;
   }
 
-  // BFS from starting points to find reachable screens
+  // BFS reachability from starting points
   const reachable = new Set<string>();
   const queue = [...startingPointIds];
   while (queue.length > 0) {
     const id = queue.shift()!;
     if (reachable.has(id)) continue;
     reachable.add(id);
-
     const entry = frameEntries.find((e) => e.node.id === id);
     if (!entry) continue;
-
     collectActions(entry.node, (action) => {
-      if (action.type === 'NODE' && action.destinationId) {
-        queue.push(action.destinationId);
-      }
+      if (action.type === 'NODE' && action.destinationId) queue.push(action.destinationId);
     });
   }
 
-  // Detect issues with user-friendly messages (using displayName for section context)
+  // === Graph checks ===
   for (const [id, screen] of screens) {
     if (!screen.hasOutgoing && !screen.hasBackAction && !screen.hasCloseAction) {
       issues.push({
-        severity: 'critical',
-        category: 'dead-end',
-        screenName: screen.displayName,
-        screenId: id,
-        message: `No way out: "${screen.displayName}" has no links, back, or close actions`,
+        severity: 'critical', category: 'dead-end',
+        screenName: screen.displayName, screenId: id,
+        message: `"${screen.displayName}" has no links, back, or close actions`,
       });
     }
 
     if (startingPointIds.size > 0 && !reachable.has(id) && !startingPointIds.has(id)) {
       issues.push({
-        severity: 'high',
-        category: 'orphan',
-        screenName: screen.displayName,
-        screenId: id,
-        message: `Unreachable: "${screen.displayName}" can't be reached from any starting point`,
+        severity: 'high', category: 'orphan',
+        screenName: screen.displayName, screenId: id,
+        message: `"${screen.displayName}" can't be reached from any starting point`,
       });
     }
 
     if (screen.incomingCount > 0 && !screen.hasBackAction && !startingPointIds.has(id)) {
       issues.push({
-        severity: 'medium',
-        category: 'back-nav',
-        screenName: screen.displayName,
-        screenId: id,
-        message: `No back button: "${screen.displayName}" — users can't return to previous screen`,
+        severity: 'medium', category: 'back-nav',
+        screenName: screen.displayName, screenId: id,
+        message: `"${screen.displayName}" — users can't return to previous screen`,
       });
     }
 
     if (screen.isOverlayTarget && !screen.hasCloseAction && !screen.hasBackAction) {
       issues.push({
-        severity: 'critical',
-        category: 'overlay-trap',
-        screenName: screen.displayName,
-        screenId: id,
-        message: `Overlay trap: "${screen.displayName}" has no close or back — users get stuck`,
+        severity: 'critical', category: 'overlay-trap',
+        screenName: screen.displayName, screenId: id,
+        message: `Overlay "${screen.displayName}" has no close or back — users get stuck`,
+      });
+    }
+  }
+
+  // === Overlap detection ===
+  // Group interactive elements by screen, check for intersection
+  const byScreen = new Map<string, InteractiveElement[]>();
+  for (const el of interactiveElements) {
+    const arr = byScreen.get(el.screenId) ?? [];
+    arr.push(el);
+    byScreen.set(el.screenId, arr);
+  }
+  for (const [screenId, elements] of byScreen) {
+    for (let i = 0; i < elements.length; i++) {
+      for (let j = i + 1; j < elements.length; j++) {
+        const a = elements[i], b = elements[j];
+        const overlapX = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+        const overlapY = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+        const area = overlapX * overlapY;
+        if (area > 0) {
+          issues.push({
+            severity: 'medium', category: 'overlap',
+            screenName: screens.get(screenId)?.displayName ?? 'Unknown',
+            screenId,
+            message: `"${a.nodeName}" and "${b.nodeName}" overlap (${Math.round(area)}px² intersection)`,
+          });
+        }
+      }
+    }
+  }
+
+  // === Scroll detection ===
+  // Check if frame content extends beyond bounds without scroll enabled
+  for (const { node } of frameEntries) {
+    if (node.type !== 'FRAME') continue;
+    const frame = node as FrameNode;
+    if (frame.overflowDirection !== 'NONE' && frame.overflowDirection !== undefined) continue;
+    if (!('children' in frame) || frame.children.length === 0) continue;
+
+    let maxChildBottom = 0;
+    let maxChildRight = 0;
+    for (const child of frame.children) {
+      if ('y' in child && 'height' in child) {
+        maxChildBottom = Math.max(maxChildBottom, (child as any).y + (child as any).height);
+      }
+      if ('x' in child && 'width' in child) {
+        maxChildRight = Math.max(maxChildRight, (child as any).x + (child as any).width);
+      }
+    }
+
+    if (maxChildBottom > frame.height + 10) {
+      issues.push({
+        severity: 'medium', category: 'scroll',
+        screenName: screens.get(node.id)?.displayName ?? node.name,
+        screenId: node.id,
+        message: `"${node.name}" has content extending ${Math.round(maxChildBottom - frame.height)}px beyond frame — scroll not enabled`,
       });
     }
   }
@@ -243,28 +285,23 @@ function buildStats(issues: PluginIssue[]) {
 // Plugin entry point
 figma.showUI(__html__, { width: 440, height: 520, themeColors: true });
 
-// Delay initial scan to let UI mount its onmessage handler
 setTimeout(() => {
   const issues = scanPrototype();
   figma.ui.postMessage({ type: 'scan-results', issues, stats: buildStats(issues) });
 }, 100);
 
-// Handle messages from UI
 figma.ui.onmessage = (msg: { type: string; nodeId?: string }) => {
   if (msg.type === 'focus-node' && msg.nodeId) {
-    const targetId = msg.nodeId;
-    const entry = getTopFrames(figma.currentPage).find((e) => e.node.id === targetId);
+    const entry = getTopFrames(figma.currentPage).find((e) => e.node.id === msg.nodeId);
     if (entry) {
       try {
         figma.viewport.scrollAndZoomIntoView([entry.node]);
         figma.currentPage.selection = [entry.node];
-      } catch (_e) {
-        // Node may have been deleted — silently ignore
-      }
+      } catch { /* node deleted */ }
     }
   } else if (msg.type === 'rescan') {
-    const newIssues = scanPrototype();
-    figma.ui.postMessage({ type: 'scan-results', issues: newIssues, stats: buildStats(newIssues) });
+    const issues = scanPrototype();
+    figma.ui.postMessage({ type: 'scan-results', issues, stats: buildStats(issues) });
   } else if (msg.type === 'close') {
     figma.closePlugin();
   }

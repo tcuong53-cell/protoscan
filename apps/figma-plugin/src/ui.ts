@@ -45,7 +45,7 @@ function renderResults(issues: PluginIssue[], stats: ScanStats) {
         <button class="btn btn-secondary" id="rescan-btn">Re-scan</button>
       </div>
       <div class="cta">
-        Get AI vision analysis + video recording with <a href="https://github.com/oxxo/protoscan#pro" target="_blank">ProtoScan Pro</a>
+        Runtime simulation + video walkthrough — <a href="https://polar.sh/checkout?productId=120d4359-72d8-4c07-bfe2-bfea4d29874f" target="_blank">Upgrade to Pro $29/mo</a>
       </div>
     `;
     document.getElementById('rescan-btn')?.addEventListener('click', rescan);
@@ -71,7 +71,7 @@ function renderResults(issues: PluginIssue[], stats: ScanStats) {
         <button class="btn btn-secondary" id="rescan-btn">Re-scan</button>
       </div>
       <div class="cta">
-        Get AI vision analysis + video recording with <a href="https://github.com/oxxo/protoscan#pro" target="_blank">ProtoScan Pro</a>
+        Runtime simulation + video walkthrough — <a href="https://polar.sh/checkout?productId=120d4359-72d8-4c07-bfe2-bfea4d29874f" target="_blank">Upgrade to Pro $29/mo</a>
       </div>
     `;
     document.getElementById('rescan-btn')?.addEventListener('click', rescan);
@@ -105,7 +105,7 @@ function renderResults(issues: PluginIssue[], stats: ScanStats) {
       <button class="btn btn-secondary" id="close-btn">Close</button>
     </div>
     <div class="cta">
-      Want AI vision analysis + video recording? <a href="https://github.com/oxxo/protoscan#pro" target="_blank">ProtoScan Pro</a>
+      Runtime simulation + video walkthrough — <a href="https://polar.sh/checkout?productId=120d4359-72d8-4c07-bfe2-bfea4d29874f" target="_blank">Upgrade to Pro $29/mo</a>
     </div>
   `;
 
