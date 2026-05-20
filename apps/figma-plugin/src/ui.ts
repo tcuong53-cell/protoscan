@@ -16,8 +16,10 @@ interface ScanStats {
 }
 
 const app = document.getElementById('app')!;
+let activeFilter: string | null = null;
+let lastIssues: PluginIssue[] = [];
+let lastStats: ScanStats = { screens: 0, startingPoints: 0, totalIssues: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0 } };
 
-// Prevent XSS — escape all user-controlled strings before inserting into HTML
 function esc(str: string): string {
   const div = document.createElement('div');
   div.textContent = str;
@@ -25,7 +27,9 @@ function esc(str: string): string {
 }
 
 function renderResults(issues: PluginIssue[], stats: ScanStats) {
-  // Empty state: no screens found on this page
+  lastIssues = issues;
+  lastStats = stats;
+
   if (stats.screens === 0) {
     app.innerHTML = `
       <div class="header">
@@ -43,9 +47,6 @@ function renderResults(issues: PluginIssue[], stats: ScanStats) {
       </div>
       <div class="actions">
         <button class="btn btn-secondary" id="rescan-btn">Re-scan</button>
-      </div>
-      <div class="cta">
-        Runtime simulation + video walkthrough — <a href="https://polar.sh/checkout?productId=120d4359-72d8-4c07-bfe2-bfea4d29874f" target="_blank">Upgrade to Pro $29/mo</a>
       </div>
     `;
     document.getElementById('rescan-btn')?.addEventListener('click', rescan);
@@ -65,21 +66,22 @@ function renderResults(issues: PluginIssue[], stats: ScanStats) {
       <div class="empty">
         <div class="empty-icon">&#10003;</div>
         <div class="empty-title">Prototype looks good!</div>
-        <div class="empty-text">No dead ends, orphans, or navigation issues found.</div>
+        <div class="empty-text">No prototype issues found across 7 checks.</div>
       </div>
       <div class="actions">
         <button class="btn btn-secondary" id="rescan-btn">Re-scan</button>
-      </div>
-      <div class="cta">
-        Runtime simulation + video walkthrough — <a href="https://polar.sh/checkout?productId=120d4359-72d8-4c07-bfe2-bfea4d29874f" target="_blank">Upgrade to Pro $29/mo</a>
       </div>
     `;
     document.getElementById('rescan-btn')?.addEventListener('click', rescan);
     return;
   }
 
-  const issuesHtml = issues.map((issue, i) => `
-    <div class="issue ${esc(issue.severity)}" data-index="${i}">
+  const filtered = activeFilter
+    ? issues.filter((i) => i.severity === activeFilter)
+    : issues;
+
+  const issuesHtml = filtered.map((issue, i) => `
+    <div class="issue ${esc(issue.severity)}" data-index="${issues.indexOf(issue)}">
       <div class="issue-header">
         <span class="issue-severity ${esc(issue.severity)}">${esc(issue.severity)}</span>
         <span class="issue-category">${esc(issue.category)}</span>
@@ -87,6 +89,11 @@ function renderResults(issues: PluginIssue[], stats: ScanStats) {
       <div class="issue-message">${esc(issue.message)}</div>
     </div>
   `).join('');
+
+  const filterBtn = (sev: string, count: number, label: string) => {
+    const active = activeFilter === sev ? ' filter-active' : '';
+    return count > 0 ? `<button class="filter-chip${active}" data-filter="${sev}">${label} (${count})</button>` : '';
+  };
 
   app.innerHTML = `
     <div class="header">
@@ -99,17 +106,33 @@ function renderResults(issues: PluginIssue[], stats: ScanStats) {
       <div class="stat"><div class="stat-value">${stats.bySeverity.medium}</div><div class="stat-label">Medium</div></div>
       <div class="stat"><div class="stat-value">${stats.totalIssues}</div><div class="stat-label">Total</div></div>
     </div>
+    <div class="filters">
+      <button class="filter-chip${!activeFilter ? ' filter-active' : ''}" data-filter="">All</button>
+      ${filterBtn('critical', stats.bySeverity.critical, 'Critical')}
+      ${filterBtn('high', stats.bySeverity.high, 'High')}
+      ${filterBtn('medium', stats.bySeverity.medium, 'Medium')}
+      ${filterBtn('low', stats.bySeverity.low, 'Low')}
+    </div>
     <div class="issues">${issuesHtml}</div>
     <div class="actions">
       <button class="btn btn-primary" id="rescan-btn">Re-scan</button>
       <button class="btn btn-secondary" id="close-btn">Close</button>
     </div>
     <div class="cta">
-      Runtime simulation + video walkthrough — <a href="https://polar.sh/checkout?productId=120d4359-72d8-4c07-bfe2-bfea4d29874f" target="_blank">Upgrade to Pro $29/mo</a>
+      Catch more with Pro — runtime simulation + video walkthrough <a href="https://polar.sh/checkout?productId=120d4359-72d8-4c07-bfe2-bfea4d29874f" target="_blank">Learn more</a>
     </div>
   `;
 
-  // Attach click handlers via addEventListener (not inline onclick — prevents XSS)
+  // Filter chips
+  document.querySelectorAll('.filter-chip').forEach((el) => {
+    el.addEventListener('click', () => {
+      const f = (el as HTMLElement).dataset.filter ?? '';
+      activeFilter = f || null;
+      renderResults(lastIssues, lastStats);
+    });
+  });
+
+  // Issue click → focus in Figma
   document.querySelectorAll('.issue').forEach((el) => {
     el.addEventListener('click', () => {
       const idx = parseInt((el as HTMLElement).dataset.index ?? '0', 10);
@@ -126,11 +149,11 @@ function renderResults(issues: PluginIssue[], stats: ScanStats) {
 }
 
 function rescan() {
+  activeFilter = null;
   app.innerHTML = '<div class="loading">Re-scanning...</div>';
   parent.postMessage({ pluginMessage: { type: 'rescan' } }, '*');
 }
 
-// Listen for messages from plugin code
 window.onmessage = (event) => {
   const msg = event.data.pluginMessage;
   if (msg?.type === 'scan-results') {

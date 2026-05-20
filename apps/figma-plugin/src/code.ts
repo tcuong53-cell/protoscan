@@ -112,8 +112,13 @@ function scanPrototype(): PluginIssue[] {
             }
 
             // Track interactive element for overlap + touch-target checks
-            if ('absoluteBoundingBox' in node && node.absoluteBoundingBox) {
-              const bb = node.absoluteBoundingBox as { x: number; y: number; width: number; height: number };
+            // Use absoluteRenderBounds (Plugin API) — absoluteBoundingBox is REST-only
+            const bb = ('absoluteRenderBounds' in node && node.absoluteRenderBounds)
+              ? node.absoluteRenderBounds as { x: number; y: number; width: number; height: number }
+              : ('width' in node && 'height' in node)
+                ? { x: 0, y: 0, width: (node as any).width, height: (node as any).height }
+                : null;
+            if (bb) {
               interactiveElements.push({
                 nodeId: node.id, nodeName: node.name,
                 screenId: parentScreenId ?? node.id,
@@ -209,6 +214,11 @@ function scanPrototype(): PluginIssue[] {
 
   // === Overlap detection ===
   // Group interactive elements by screen, check for intersection
+  const MIN_OVERLAP_AREA = 100; // ignore tiny overlaps (shadows, sub-pixel)
+  const MAX_OVERLAP_ISSUES = 20;
+  const MAX_ELEMENTS_PER_SCREEN = 100;
+  let overlapCount = 0;
+
   const byScreen = new Map<string, InteractiveElement[]>();
   for (const el of interactiveElements) {
     const arr = byScreen.get(el.screenId) ?? [];
@@ -216,19 +226,21 @@ function scanPrototype(): PluginIssue[] {
     byScreen.set(el.screenId, arr);
   }
   for (const [screenId, elements] of byScreen) {
-    for (let i = 0; i < elements.length; i++) {
-      for (let j = i + 1; j < elements.length; j++) {
+    if (elements.length > MAX_ELEMENTS_PER_SCREEN) continue;
+    for (let i = 0; i < elements.length && overlapCount < MAX_OVERLAP_ISSUES; i++) {
+      for (let j = i + 1; j < elements.length && overlapCount < MAX_OVERLAP_ISSUES; j++) {
         const a = elements[i], b = elements[j];
         const overlapX = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
         const overlapY = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
         const area = overlapX * overlapY;
-        if (area > 0) {
+        if (area >= MIN_OVERLAP_AREA) {
           issues.push({
             severity: 'medium', category: 'overlap',
             screenName: screens.get(screenId)?.displayName ?? 'Unknown',
             screenId,
-            message: `"${a.nodeName}" and "${b.nodeName}" overlap (${Math.round(area)}px² intersection)`,
+            message: `"${a.nodeName}" and "${b.nodeName}" have overlapping tap areas (${Math.round(area)}px²) — users may trigger the wrong action`,
           });
+          overlapCount++;
         }
       }
     }
@@ -236,29 +248,28 @@ function scanPrototype(): PluginIssue[] {
 
   // === Scroll detection ===
   // Check if frame content extends beyond bounds without scroll enabled
+  const SCROLL_THRESHOLD = 44; // ignore minor overflow (shadows, decorative elements)
   for (const { node } of frameEntries) {
     if (node.type !== 'FRAME') continue;
     const frame = node as FrameNode;
-    if (frame.overflowDirection !== 'NONE' && frame.overflowDirection !== undefined) continue;
+    if (frame.overflowDirection && frame.overflowDirection !== 'NONE') continue;
     if (!('children' in frame) || frame.children.length === 0) continue;
 
     let maxChildBottom = 0;
-    let maxChildRight = 0;
     for (const child of frame.children) {
+      if (!('visible' in child) || !(child as any).visible) continue; // skip hidden layers
       if ('y' in child && 'height' in child) {
         maxChildBottom = Math.max(maxChildBottom, (child as any).y + (child as any).height);
       }
-      if ('x' in child && 'width' in child) {
-        maxChildRight = Math.max(maxChildRight, (child as any).x + (child as any).width);
-      }
     }
 
-    if (maxChildBottom > frame.height + 10) {
+    const overflow = maxChildBottom - frame.height;
+    if (overflow > SCROLL_THRESHOLD) {
       issues.push({
         severity: 'medium', category: 'scroll',
         screenName: screens.get(node.id)?.displayName ?? node.name,
         screenId: node.id,
-        message: `"${node.name}" has content extending ${Math.round(maxChildBottom - frame.height)}px beyond frame — scroll not enabled`,
+        message: `"${node.name}" has content extending ${Math.round(overflow)}px beyond frame — scroll not enabled`,
       });
     }
   }

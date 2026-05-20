@@ -76,6 +76,14 @@
   .empty-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
   .empty-text { color: var(--figma-color-text-secondary, #999); }
   .loading { text-align: center; padding: 48px; color: var(--figma-color-text-secondary, #999); }
+  .filters { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+  .filter-chip {
+    font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid var(--figma-color-border, #ddd);
+    background: var(--figma-color-bg, #fff); color: var(--figma-color-text-secondary, #999);
+    cursor: pointer; transition: all 0.15s;
+  }
+  .filter-chip:hover { border-color: #6366f1; color: var(--figma-color-text, #333); }
+  .filter-chip.filter-active { background: #6366f1; color: white; border-color: #6366f1; }
 </style>
 </head>
 <body>
