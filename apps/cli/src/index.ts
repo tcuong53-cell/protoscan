@@ -84,26 +84,37 @@ program
 
       let simulatorIssues: Issue[] = [];
       if (options.simulate) {
-        try {
-          const recordDir = options.record === true ? '.' : (options.record || undefined);
-          if (recordDir) {
-            console.error(`Recording walkthrough video to: ${recordDir}`);
+        const proKey = options.apiKey ?? process.env.PROTOSCAN_API_KEY;
+        if (!proKey) {
+          console.error('');
+          console.error('  ⚡ --simulate is a ProtoScan Pro feature.');
+          console.error('  Set PROTOSCAN_API_KEY to enable runtime simulation.');
+          console.error('  Get your key at: https://protoscan.dev/pro');
+          console.error('');
+          console.error('  Static analysis will continue without simulation.');
+          console.error('');
+        } else {
+          try {
+            const recordDir = options.record === true ? '.' : (options.record || undefined);
+            if (recordDir) {
+              console.error(`Recording walkthrough video to: ${recordDir}`);
+            }
+            console.error('Running simulator (this may take several minutes)...');
+            const { walkPrototype } = await import('@protoscan/simulator');
+            const walkResult = await walkPrototype(graph, { fileKey, recordDir });
+            simulatorIssues = walkResult.issues;
+            console.error(`Simulator: ${simulatorIssues.length} runtime issue(s) found.`);
+            if (walkResult.videoPath) {
+              console.error(`Recording saved: ${walkResult.videoPath}`);
+            }
+          } catch (err: unknown) {
+            if (isModuleNotFound(err, '@protoscan/simulator')) {
+              console.error('Error: --simulate requires @protoscan/simulator.');
+              console.error('  npm install -g @protoscan/simulator');
+              process.exit(1);
+            }
+            throw err;
           }
-          console.error('Running simulator (this may take several minutes)...');
-          const { walkPrototype } = await import('@protoscan/simulator');
-          const walkResult = await walkPrototype(graph, { fileKey, recordDir });
-          simulatorIssues = walkResult.issues;
-          console.error(`Simulator: ${simulatorIssues.length} runtime issue(s) found.`);
-          if (walkResult.videoPath) {
-            console.error(`Recording saved: ${walkResult.videoPath}`);
-          }
-        } catch (err: unknown) {
-          if (isModuleNotFound(err, '@protoscan/simulator')) {
-            console.error('Error: --simulate requires @protoscan/simulator.');
-            console.error('  npm install -g @protoscan/simulator');
-            process.exit(1);
-          }
-          throw err;
         }
       } else if (options.record) {
         console.error('Warning: --record requires --simulate. Ignoring --record.');

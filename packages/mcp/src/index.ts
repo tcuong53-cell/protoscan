@@ -91,24 +91,28 @@ registerAppTool(
       const client = new FigmaClient(token);
       const file = await client.getFile(fileKey);
 
-      // Run simulator if requested
+      // Run simulator if requested (Pro feature — requires PROTOSCAN_API_KEY)
       let simulatorIssues: Issue[] = [];
       let videoPath: string | undefined;
       if (args.simulate) {
-        try {
-          const { walkPrototype } = await import('@protoscan/simulator');
-          const graph = buildGraph(file, {
-            pageIds: pageIds.length ? pageIds : undefined,
-          });
-          console.error('[protoscan] Running simulator (this may take several minutes)...');
-          const walkResult = await walkPrototype(graph, { fileKey, maxScreens: 30 });
-          simulatorIssues = walkResult.issues;
-          videoPath = walkResult.videoPath;
-          console.error(`[protoscan] Simulator: ${simulatorIssues.length} runtime issue(s)`);
-        } catch (simError) {
-          const msg = simError instanceof Error ? simError.message : String(simError);
-          console.error(`[protoscan] Simulator error: ${msg}`);
-          // Continue with static analysis even if simulator fails
+        const proKey = process.env.PROTOSCAN_API_KEY;
+        if (!proKey) {
+          console.error('[protoscan] simulate requires PROTOSCAN_API_KEY — skipping, running static analysis only');
+        } else {
+          try {
+            const { walkPrototype } = await import('@protoscan/simulator');
+            const graph = buildGraph(file, {
+              pageIds: pageIds.length ? pageIds : undefined,
+            });
+            console.error('[protoscan] Running simulator (this may take several minutes)...');
+            const walkResult = await walkPrototype(graph, { fileKey, maxScreens: 30 });
+            simulatorIssues = walkResult.issues;
+            videoPath = walkResult.videoPath;
+            console.error(`[protoscan] Simulator: ${simulatorIssues.length} runtime issue(s)`);
+          } catch (simError) {
+            const msg = simError instanceof Error ? simError.message : String(simError);
+            console.error(`[protoscan] Simulator error: ${msg}`);
+          }
         }
       }
 
