@@ -36,7 +36,7 @@ program
   .option('--record [dir]', 'Record simulator walkthrough video (requires --simulate, saves .webm)')
   .option('--upload', 'Upload HTML report to GitHub Gist and return shareable URL (requires GITHUB_TOKEN)')
   .option('--vision', 'Run AI vision analysis on each screen with GPT-4o (requires PROTOSCAN_API_KEY or OPENAI_API_KEY)')
-  .option('--api-key <key>', 'ProtoScan API key for server-side vision (or set PROTOSCAN_API_KEY env var)')
+  // PROTOSCAN_API_KEY via env var only — never pass keys as CLI args (shell history exposure)
   .option('--max-vision-cost <usd>', 'Maximum USD to spend on vision analysis', '5')
   .action(async (input: string, options) => {
     // Parse Figma URL or raw file key
@@ -84,7 +84,7 @@ program
 
       let simulatorIssues: Issue[] = [];
       if (options.simulate) {
-        const proKey = options.apiKey ?? process.env.PROTOSCAN_API_KEY;
+        const proKey = process.env.PROTOSCAN_API_KEY;
         if (!proKey) {
           console.error('');
           console.error('  ⚡ --simulate is a ProtoScan Pro feature.');
@@ -93,12 +93,15 @@ program
           console.error('');
           console.error('  Static analysis will continue without simulation.');
           console.error('');
-        } else if (!(await validateLicenseKey(proKey)).valid) {
-          console.error('');
-          console.error('  ⚠ Invalid or expired PROTOSCAN_API_KEY.');
-          console.error('  Renew at: https://protoscan.dev/pro');
-          console.error('');
         } else {
+          const license = await validateLicenseKey(proKey);
+          if (!license.valid) {
+            console.error('');
+            console.error(`  ⚠ ${license.error ?? 'Invalid or expired PROTOSCAN_API_KEY.'}`);
+            console.error('  Get or renew your key at: https://protoscan.dev/pro');
+            console.error('');
+            process.exit(1);
+          }
           try {
             const recordDir = options.record === true ? '.' : (options.record || undefined);
             if (recordDir) {
@@ -127,7 +130,7 @@ program
 
       let visionIssues: Issue[] = [];
       if (options.vision) {
-        const protoscanKey = options.apiKey ?? process.env.PROTOSCAN_API_KEY;
+        const protoscanKey = process.env.PROTOSCAN_API_KEY;
         const openaiKey = process.env.OPENAI_API_KEY;
         const screenCount = graph.nodes.size;
         const COST_PER_SCREEN = 0.005;
