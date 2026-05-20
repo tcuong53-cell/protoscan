@@ -219,13 +219,15 @@ export async function walkPrototype(
         e.navigation === 'NAVIGATE' &&
         TAPPABLE_TRIGGERS.has(e.trigger) &&
         e.sourceElementBoundingBox &&
-        !clickedEdges.has(`${screenId}:${e.destinationId}`),
+        !clickedEdges.has(`${screenId}:${e.destinationId}`) &&
+        graph.nodes.has(e.destinationId), // skip cross-page destinations
       );
   }
 
   function getTimeoutEdges(screenId: string): GraphEdge[] {
     return (graph.edges.get(screenId) ?? [])
-      .filter(e => e.trigger === 'AFTER_TIMEOUT' && e.navigation === 'NAVIGATE');
+      .filter(e => e.trigger === 'AFTER_TIMEOUT' && e.navigation === 'NAVIGATE' &&
+        graph.nodes.has(e.destinationId));
   }
 
   // Track clicks for ffmpeg post-processing (time relative to video start)
