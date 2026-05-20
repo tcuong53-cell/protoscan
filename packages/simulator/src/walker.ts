@@ -40,9 +40,14 @@ const DEFAULT_SESSION_PATH = resolve(
 const PROTO_BASE = 'https://www.figma.com/proto';
 const TAPPABLE_TRIGGERS = new Set(['ON_CLICK', 'ON_PRESS', 'MOUSE_DOWN']);
 
-// iPhone 15 Pro viewport — matches 390x844 Figma frame aspect ratio
-const VP_W = 430;
-const VP_H = 932;
+// Viewport padding added around the frame (Figma device chrome needs ~40px)
+const VP_PAD_X = 40;
+const VP_PAD_Y = 88;
+// Viewport bounds — stay within reasonable screen sizes
+const VP_MIN_W = 320;
+const VP_MIN_H = 480;
+const VP_MAX_W = 1920;
+const VP_MAX_H = 1200;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -94,12 +99,42 @@ export async function walkPrototype(
     throw err;
   }
 
+  const issues: Issue[] = [];
+  let issueCounter = 0;
+
+  // Map each screen to its flow starting point
+  const nodeToFlow = new Map<string, string>();
+  for (const sp of graph.startingPoints) {
+    const q = [sp.nodeId]; const seen = new Set<string>();
+    while (q.length) {
+      const id = q.shift()!;
+      if (seen.has(id)) continue; seen.add(id);
+      if (!nodeToFlow.has(id)) nodeToFlow.set(id, sp.nodeId);
+      for (const e of graph.edges.get(id) ?? []) q.push(e.destinationId);
+    }
+  }
+
+  // Find starting point — needed to compute viewport dimensions
+  const startId = graph.startingPoints[0]?.nodeId;
+  const startNode = startId ? graph.nodes.get(startId) : undefined;
+  if (!startId || !startNode?.boundingBox) {
+    await browser.close();
+    return { issues };
+  }
+
+  const frameW = startNode.boundingBox.width;
+  const frameH = startNode.boundingBox.height;
+
+  // Dynamic viewport: match frame aspect ratio with padding for device chrome
+  const vpW = Math.min(Math.max(frameW + VP_PAD_X, VP_MIN_W), VP_MAX_W);
+  const vpH = Math.min(Math.max(frameH + VP_PAD_Y, VP_MIN_H), VP_MAX_H);
+
   const context = await browser.newContext({
-    viewport: { width: VP_W, height: VP_H },
-    ...(recordDir ? { recordVideo: { dir: recordDir, size: { width: VP_W, height: VP_H } } } : {}),
+    viewport: { width: vpW, height: vpH },
+    ...(recordDir ? { recordVideo: { dir: recordDir, size: { width: vpW, height: vpH } } } : {}),
   });
 
-  let videoStartTime = Date.now(); // will be refined when page.goto starts
+  let videoStartTime = Date.now();
 
   // Anti-detection
   await context.addInitScript(() => {
@@ -124,37 +159,11 @@ export async function walkPrototype(
 
   const page = await context.newPage();
 
-  const issues: Issue[] = [];
-  let issueCounter = 0;
-
-  // Map each screen to its flow starting point
-  const nodeToFlow = new Map<string, string>();
-  for (const sp of graph.startingPoints) {
-    const q = [sp.nodeId]; const seen = new Set<string>();
-    while (q.length) {
-      const id = q.shift()!;
-      if (seen.has(id)) continue; seen.add(id);
-      if (!nodeToFlow.has(id)) nodeToFlow.set(id, sp.nodeId);
-      for (const e of graph.edges.get(id) ?? []) q.push(e.destinationId);
-    }
-  }
-
-  // Find starting point
-  const startId = graph.startingPoints[0]?.nodeId;
-  const startNode = startId ? graph.nodes.get(startId) : undefined;
-  if (!startId || !startNode?.boundingBox) {
-    await browser.close();
-    return { issues };
-  }
-
-  const frameW = startNode.boundingBox.width;
-  const frameH = startNode.boundingBox.height;
-
   // === SINGLE PAGE LOAD ===
   const startFlow = nodeToFlow.get(startId) ?? startId;
   const startUrl = `${PROTO_BASE}/${fileKey}/?node-id=${startId.replace(':', '-')}&scaling=scale-down-width&hide-ui=1&hotspot-hints=0&starting-point-node-id=${startFlow.replace(':', '-')}`;
 
-  console.log(`[walker] Loading prototype: "${startNode.name}" (frame ${frameW}x${frameH})...`);
+  console.log(`[walker] Loading prototype: "${startNode.name}" (frame ${frameW}x${frameH}, viewport ${vpW}x${vpH})...`);
   try {
     await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForSelector('canvas', { timeout: 20_000 });
@@ -174,7 +183,7 @@ export async function walkPrototype(
 
   // Offset + scale detection (lazy — runs after first real screen loads)
   let offset = { x: 0, y: 0 };
-  let scale = VP_W / frameW; // theoretical default
+  let scale = vpW / frameW; // theoretical default
   let offsetDetected = false;
 
   async function ensureOffset(): Promise<void> {
@@ -190,11 +199,11 @@ export async function walkPrototype(
     // We use derivative-based detection: find the first column with a SHARP brightness jump.
     for (let attempt = 0; attempt < 5; attempt++) {
       const detected = await detectOffset(page);
-      const contentW = VP_W - 2 * detected.x;
+      const contentW = vpW - 2 * detected.x;
       // Valid: content fills > 60% of viewport and offset is reasonable
       // (for a phone-sized frame in phone viewport, offset should be >= ~10px)
-      const minOffset = Math.max(Math.floor((VP_W - frameW) / 2) - 5, 0);
-      if (contentW > VP_W * 0.6 && detected.x >= minOffset) {
+      const minOffset = Math.max(Math.floor((vpW - frameW) / 2) - 5, 0);
+      if (contentW > vpW * 0.6 && detected.x >= minOffset) {
         offset = detected;
         scale = contentW / frameW;
         offsetDetected = true;
@@ -205,12 +214,12 @@ export async function walkPrototype(
         return;
       }
       // If detected offset is too small (bezel detected as content), use theoretical center
-      if (detected.x < minOffset && contentW > VP_W * 0.6) {
+      if (detected.x < minOffset && contentW > vpW * 0.6) {
         // Guard: when frame is wider than viewport, Figma scales down — no centering offset
-        const theoreticalOx = frameW >= VP_W ? 0 : Math.round((VP_W - frameW) / 2);
-        const theoreticalOy = detected.y > 10 ? detected.y : Math.round((VP_H - frameH) / 2);
+        const theoreticalOx = frameW >= vpW ? 0 : Math.round((vpW - frameW) / 2);
+        const theoreticalOy = detected.y > 10 ? detected.y : Math.round((vpH - frameH) / 2);
         offset = { x: theoreticalOx, y: Math.max(theoreticalOy, 0) };
-        scale = frameW >= VP_W ? VP_W / frameW : (frameW > 0 ? (VP_W - 2 * theoreticalOx) / frameW : 1);
+        scale = frameW >= vpW ? vpW / frameW : (frameW > 0 ? (vpW - 2 * theoreticalOx) / frameW : 1);
         offsetDetected = true;
         console.log(`[walker] Offset: (${offset.x}, ${offset.y}), scale: ${scale.toFixed(3)} (theoretical — device frame detected)`);
         if (recordDir) {
@@ -222,10 +231,10 @@ export async function walkPrototype(
     }
 
     // Fallback: use theoretical centered offset (guard for wide frames)
-    const theoreticalOx = frameW >= VP_W ? 0 : Math.round((VP_W - frameW) / 2);
-    const theoreticalOy = frameH >= VP_H ? 0 : Math.round((VP_H - frameH) / 2);
+    const theoreticalOx = frameW >= vpW ? 0 : Math.round((vpW - frameW) / 2);
+    const theoreticalOy = frameH >= vpH ? 0 : Math.round((vpH - frameH) / 2);
     offset = { x: theoreticalOx, y: theoreticalOy };
-    scale = frameW >= VP_W ? VP_W / frameW : (frameW > 0 ? (VP_W - 2 * theoreticalOx) / frameW : 1);
+    scale = frameW >= vpW ? vpW / frameW : (frameW > 0 ? (vpW - 2 * theoreticalOx) / frameW : 1);
     offsetDetected = true;
     console.log(`[walker] ⚠ Offset detection failed after 10s — using theoretical (${offset.x}, ${offset.y}), scale ${scale.toFixed(3)}`);
     if (recordDir) {
