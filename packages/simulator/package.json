@@ -1,6 +1,6 @@
 {
   "name": "@protoscan/simulator",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Headless Playwright prototype walker for ProtoScan",
   "license": "MIT",
   "type": "module",
@@ -26,7 +26,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@protoscan/core": "0.1.2",
+    "@protoscan/core": "0.1.3",
     "playwright": "^1.52.0"
   },
   "devDependencies": {

@@ -1,6 +1,6 @@
 {
   "name": "@protoscan/core",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Core analysis engine — graph traversal, spatial checks, and reporting for Figma prototypes.",
   "type": "module",
   "main": "dist/index.js",
