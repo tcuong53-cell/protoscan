@@ -11,3 +11,5 @@ dogfood*.json
 report*.html
 .panel/
 private/
+.github/workflows/
+recordings/

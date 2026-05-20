@@ -1,6 +1,6 @@
 {
   "name": "@protoscan/vision",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI vision screen analysis for ProtoScan (proprietary)",
   "license": "UNLICENSED",
   "private": true,
@@ -19,7 +19,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@protoscan/core": "0.1.0",
+    "@protoscan/core": "0.1.1",
     "openai": "^4.100.0"
   },
   "devDependencies": {
