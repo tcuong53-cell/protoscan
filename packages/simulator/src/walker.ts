@@ -113,7 +113,7 @@ export async function walkPrototype(
     // Only inject cookies with Figma-related domains
     const figmaCookies = session.cookies.filter(c => {
       const domain = (c.domain as string) ?? '';
-      return domain.endsWith('.figma.com') || domain === 'figma.com' || domain === '';
+      return domain.endsWith('.figma.com') || domain === 'figma.com';
     });
     await context.addCookies(figmaCookies.map(c => ({
       name: c.name, value: c.value, domain: c.domain as string | undefined,
@@ -168,7 +168,7 @@ export async function walkPrototype(
   // Hybrid: wait for network idle first, then ensure minimum 12s total from page load.
   // On fast connections this saves ~3s vs flat 15s. On slow, networkidle adds needed time.
   const loadStart = Date.now();
-  await page.waitForLoadState('networkidle').catch(() => {});
+  await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => {});
   const remaining = Math.max(12_000 - (Date.now() - loadStart), 3_000);
   await sleep(remaining);
 
@@ -206,10 +206,11 @@ export async function walkPrototype(
       }
       // If detected offset is too small (bezel detected as content), use theoretical center
       if (detected.x < minOffset && contentW > VP_W * 0.6) {
-        const theoreticalOx = Math.round((VP_W - frameW) / 2);
+        // Guard: when frame is wider than viewport, Figma scales down — no centering offset
+        const theoreticalOx = frameW >= VP_W ? 0 : Math.round((VP_W - frameW) / 2);
         const theoreticalOy = detected.y > 10 ? detected.y : Math.round((VP_H - frameH) / 2);
-        offset = { x: theoreticalOx, y: theoreticalOy };
-        scale = frameW > 0 ? (VP_W - 2 * theoreticalOx) / frameW : 1;
+        offset = { x: theoreticalOx, y: Math.max(theoreticalOy, 0) };
+        scale = frameW >= VP_W ? VP_W / frameW : (frameW > 0 ? (VP_W - 2 * theoreticalOx) / frameW : 1);
         offsetDetected = true;
         console.log(`[walker] Offset: (${offset.x}, ${offset.y}), scale: ${scale.toFixed(3)} (theoretical — device frame detected)`);
         if (recordDir) {
@@ -220,11 +221,11 @@ export async function walkPrototype(
       await sleep(2000);
     }
 
-    // Fallback: use theoretical centered offset
-    const theoreticalOx = Math.round((VP_W - frameW) / 2);
-    const theoreticalOy = Math.round((VP_H - frameH) / 2);
+    // Fallback: use theoretical centered offset (guard for wide frames)
+    const theoreticalOx = frameW >= VP_W ? 0 : Math.round((VP_W - frameW) / 2);
+    const theoreticalOy = frameH >= VP_H ? 0 : Math.round((VP_H - frameH) / 2);
     offset = { x: theoreticalOx, y: theoreticalOy };
-    scale = frameW > 0 ? (VP_W - 2 * theoreticalOx) / frameW : 1;
+    scale = frameW >= VP_W ? VP_W / frameW : (frameW > 0 ? (VP_W - 2 * theoreticalOx) / frameW : 1);
     offsetDetected = true;
     console.log(`[walker] ⚠ Offset detection failed after 10s — using theoretical (${offset.x}, ${offset.y}), scale ${scale.toFixed(3)}`);
     if (recordDir) {
