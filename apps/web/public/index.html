@@ -1,1 +1,255 @@
-<!DOCTYPE html><html><body><h1>ProtoScan API</h1><p>Endpoints: /api/vision, /api/webhook, /api/validate-key</p></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ProtoScan — Automated Figma Prototype QA</title>
+  <meta name="description" content="Detect dead-end screens, orphan screens, and navigation issues in your Figma prototypes. Free CLI, MCP server for Claude, and Figma plugin.">
+  <meta property="og:title" content="ProtoScan — Automated Figma Prototype QA">
+  <meta property="og:description" content="Find prototype navigation issues before your users do. 7 automated checks, runtime simulation, and video walkthroughs.">
+  <meta property="og:type" content="website">
+  <style>
+    :root {
+      --bg: #0a0a0b;
+      --bg-card: #141416;
+      --border: #27272a;
+      --text: #fafafa;
+      --text-secondary: #a1a1aa;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --critical: #ef4444;
+      --high: #f59e0b;
+      --medium: #3b82f6;
+      --green: #22c55e;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hover); }
+    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+    /* Nav */
+    nav { padding: 16px 0; border-bottom: 1px solid var(--border); }
+    nav .container { display: flex; justify-content: space-between; align-items: center; }
+    .logo { font-weight: 700; font-size: 18px; letter-spacing: -0.5px; }
+    .nav-links { display: flex; gap: 24px; align-items: center; }
+    .nav-links a { color: var(--text-secondary); font-size: 14px; }
+    .nav-links a:hover { color: var(--text); }
+
+    /* Hero */
+    .hero { padding: 80px 0 60px; text-align: center; }
+    .hero h1 { font-size: 48px; font-weight: 800; letter-spacing: -1.5px; line-height: 1.1; margin-bottom: 20px; }
+    .hero h1 span { background: linear-gradient(135deg, var(--accent), #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero p { font-size: 18px; color: var(--text-secondary); max-width: 560px; margin: 0 auto 32px; }
+    .hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 600;
+      border: none; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-secondary { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { border-color: var(--accent); }
+    .install-cmd {
+      margin-top: 24px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 14px;
+      color: var(--text-secondary); background: var(--bg-card); padding: 12px 20px;
+      border-radius: 8px; border: 1px solid var(--border); display: inline-block;
+    }
+    .install-cmd code { color: var(--green); }
+
+    /* Checks grid */
+    .section { padding: 60px 0; }
+    .section-title { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 8px; text-align: center; }
+    .section-subtitle { font-size: 16px; color: var(--text-secondary); text-align: center; margin-bottom: 40px; }
+    .checks-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .check-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 20px; transition: border-color 0.2s;
+    }
+    .check-card:hover { border-color: var(--accent); }
+    .check-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .check-badge {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      padding: 2px 6px; border-radius: 4px; color: white;
+    }
+    .check-badge.critical { background: var(--critical); }
+    .check-badge.high { background: var(--high); }
+    .check-badge.medium { background: var(--medium); }
+    .check-name { font-weight: 600; font-size: 15px; }
+    .check-desc { color: var(--text-secondary); font-size: 13px; }
+
+    /* Distribution */
+    .dist-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .dist-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 24px;
+    }
+    .dist-card h3 { font-size: 16px; margin-bottom: 4px; }
+    .dist-card p { color: var(--text-secondary); font-size: 13px; margin-bottom: 12px; }
+    .dist-card pre {
+      background: var(--bg); padding: 10px 14px; border-radius: 6px; font-size: 12px;
+      overflow-x: auto; color: var(--green); border: 1px solid var(--border);
+    }
+
+    /* Pricing */
+    .pricing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; max-width: 700px; margin: 0 auto; }
+    .price-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 28px; text-align: center;
+    }
+    .price-card.featured { border-color: var(--accent); }
+    .price-card h3 { font-size: 20px; margin-bottom: 4px; }
+    .price-amount { font-size: 36px; font-weight: 800; margin: 12px 0 4px; }
+    .price-amount span { font-size: 16px; font-weight: 400; color: var(--text-secondary); }
+    .price-features { list-style: none; text-align: left; margin: 20px 0; font-size: 13px; color: var(--text-secondary); }
+    .price-features li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+    .price-features li::before { content: "\2713 "; color: var(--green); font-weight: 700; }
+
+    /* Footer */
+    footer { border-top: 1px solid var(--border); padding: 32px 0; text-align: center; color: var(--text-secondary); font-size: 13px; }
+    footer a { color: var(--text-secondary); }
+    footer a:hover { color: var(--text); }
+
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 32px; }
+      .hero p { font-size: 16px; }
+      .checks-grid, .dist-grid, .pricing-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <div class="logo">ProtoScan</div>
+    <div class="nav-links">
+      <a href="#checks">Checks</a>
+      <a href="#install">Install</a>
+      <a href="#pricing">Pricing</a>
+      <a href="https://github.com/oxxo/protoscan" target="_blank">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <h1>Find prototype bugs<br><span>before your users do</span></h1>
+    <p>ProtoScan scans your Figma prototypes and detects dead-end screens, orphan screens, small touch targets, and 4 more navigation issues. Free CLI, MCP server, and Figma plugin.</p>
+    <div class="hero-actions">
+      <a href="#install" class="btn btn-primary">Get started</a>
+      <a href="https://github.com/oxxo/protoscan" class="btn btn-secondary" target="_blank">View on GitHub</a>
+    </div>
+    <div class="install-cmd">
+      $ <code>npx @protoscan/cli scan your-figma-url</code>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="checks">
+  <div class="container">
+    <div class="section-title">7 automated checks</div>
+    <div class="section-subtitle">Catch issues that manual QA misses</div>
+    <div class="checks-grid">
+      <div class="check-card">
+        <div class="check-header"><span class="check-badge critical">Critical</span><span class="check-name">Dead-end screens</span></div>
+        <div class="check-desc">Screens with no outgoing links, back, or close actions. Users get stuck with no way out.</div>
+      </div>
+      <div class="check-card">
+        <div class="check-header"><span class="check-badge critical">Critical</span><span class="check-name">Overlay traps</span></div>
+        <div class="check-desc">Overlays that open but have no close or back action. Users are trapped in a modal.</div>
+      </div>
+      <div class="check-card">
+        <div class="check-header"><span class="check-badge high">High</span><span class="check-name">Orphan screens</span></div>
+        <div class="check-desc">Screens that can't be reached from any flow starting point. Disconnected from the prototype.</div>
+      </div>
+      <div class="check-card">
+        <div class="check-header"><span class="check-badge high">High</span><span class="check-name">Small touch targets</span></div>
+        <div class="check-desc">Interactive elements smaller than 44x44px. Hard to tap on mobile devices.</div>
+      </div>
+      <div class="check-card">
+        <div class="check-header"><span class="check-badge medium">Medium</span><span class="check-name">Missing back navigation</span></div>
+        <div class="check-desc">Screens with incoming links but no back action. Users can navigate in but not out.</div>
+      </div>
+      <div class="check-card">
+        <div class="check-header"><span class="check-badge medium">Medium</span><span class="check-name">Overlapping hotspots</span></div>
+        <div class="check-desc">Interactive elements with overlapping tap areas. Users may accidentally trigger the wrong action.</div>
+      </div>
+      <div class="check-card">
+        <div class="check-header"><span class="check-badge medium">Medium</span><span class="check-name">Missing scroll</span></div>
+        <div class="check-desc">Frames with content extending beyond bounds but scroll not enabled. Content is hidden.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="install" style="border-top: 1px solid var(--border);">
+  <div class="container">
+    <div class="section-title">Works everywhere</div>
+    <div class="section-subtitle">CLI, Figma plugin, or Claude MCP server</div>
+    <div class="dist-grid">
+      <div class="dist-card">
+        <h3>CLI</h3>
+        <p>Scan any Figma file from the terminal. Great for CI/CD pipelines.</p>
+        <pre>npx @protoscan/cli scan "https://figma.com/design/..."</pre>
+      </div>
+      <div class="dist-card">
+        <h3>Claude MCP</h3>
+        <p>Ask Claude to scan your prototype. Works in Claude Desktop and claude.ai.</p>
+        <pre>npx -y @protoscan/mcp</pre>
+      </div>
+      <div class="dist-card">
+        <h3>Figma Plugin</h3>
+        <p>Scan directly inside Figma. Click any issue to jump to the screen.</p>
+        <pre>Plugins &gt; ProtoScan</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="pricing" style="border-top: 1px solid var(--border);">
+  <div class="container">
+    <div class="section-title">Pricing</div>
+    <div class="section-subtitle">Free for static analysis. Pro for runtime simulation.</div>
+    <div class="pricing-grid">
+      <div class="price-card">
+        <h3>Free</h3>
+        <div class="price-amount">$0</div>
+        <ul class="price-features">
+          <li>7 static analysis checks</li>
+          <li>CLI + MCP server</li>
+          <li>Figma plugin</li>
+          <li>HTML report</li>
+          <li>Unlimited scans</li>
+        </ul>
+        <a href="#install" class="btn btn-secondary" style="width:100%">Get started</a>
+      </div>
+      <div class="price-card featured">
+        <h3>Pro</h3>
+        <div class="price-amount">$29<span>/mo</span></div>
+        <ul class="price-features">
+          <li>Everything in Free</li>
+          <li>Runtime prototype simulation</li>
+          <li>Video walkthrough recording</li>
+          <li>AI vision analysis (GPT-4o)</li>
+          <li>Verify clicks actually navigate</li>
+        </ul>
+        <a href="https://polar.sh/checkout?productId=120d4359-72d8-4c07-bfe2-bfea4d29874f" class="btn btn-primary" style="width:100%" target="_blank">Subscribe</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>ProtoScan &mdash; Open source prototype QA. <a href="https://github.com/oxxo/protoscan">GitHub</a> &middot; MIT License</p>
+  </div>
+</footer>
+
+</body>
+</html>
