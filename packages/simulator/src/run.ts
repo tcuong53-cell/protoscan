@@ -17,7 +17,12 @@ const graph = buildGraph(file);
 
 console.log(`[run] Graph: ${graph.nodes.size} screens, ${graph.startingPoints.length} starting points`);
 
-const { issues } = await walkPrototype(graph, { fileKey: FILE_KEY, maxScreens: 30, navTimeout: 8_000 });
+const { issues, videoPath } = await walkPrototype(graph, {
+  fileKey: FILE_KEY,
+  maxScreens: 30,
+  navTimeout: 8_000,
+  recordDir: './recordings',
+});
 
 if (issues.length === 0) {
   console.log('\n✅ No runtime navigation failures found.');
