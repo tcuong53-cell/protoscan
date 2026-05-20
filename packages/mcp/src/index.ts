@@ -2,7 +2,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { FigmaClient, FigmaApiError, scan, formatTerminal, formatJson, formatHtml } from '@protoscan/core';
+import { FigmaClient, FigmaApiError, scan, buildGraph, formatTerminal, formatJson, formatHtml } from '@protoscan/core';
+import type { Issue } from '@protoscan/core';
 import {
   registerAppTool,
   registerAppResource,
@@ -56,10 +57,11 @@ registerAppTool(
   {
     title: 'Scan Figma Prototype',
     description:
-      'Scan a Figma file for prototype navigation issues: dead-end screens, orphan screens, missing back navigation, undersized touch targets, overlapping hotspots, missing scroll, and overlay traps. Returns a detailed report. If the client supports MCP Apps, renders an interactive HTML report inline.',
+      'Scan a Figma file for prototype navigation issues: dead-end screens, orphan screens, missing back navigation, undersized touch targets, overlapping hotspots, missing scroll, and overlay traps. Optionally run a headless browser simulator to verify clicks actually navigate. Returns a detailed report. If the client supports MCP Apps, renders an interactive HTML report inline.',
     inputSchema: {
       file_key: z.string().describe('Figma file key or full URL (e.g. "abc123" or "https://figma.com/design/abc123/Name?node-id=7-2")'),
       token: z.string().optional().describe('Figma Personal Access Token. Falls back to FIGMA_TOKEN env var.'),
+      simulate: z.boolean().optional().default(false).describe('Run headless browser simulator to verify prototype navigation actually works. Slower (~2 min) but catches runtime issues static analysis misses.'),
       format: z.enum(['terminal', 'json']).optional().default('terminal').describe('Output format for text response'),
       min_touch_target: z.number().optional().default(44).describe('Minimum touch target size in px'),
       skip: z.array(z.string()).optional().describe('Checks to skip: dead-end, orphan, back-nav, touch-target, overlap, scroll, overlay-trap'),
@@ -85,11 +87,33 @@ registerAppTool(
       const client = new FigmaClient(token);
       const file = await client.getFile(fileKey);
 
+      // Run simulator if requested
+      let simulatorIssues: Issue[] = [];
+      let videoPath: string | undefined;
+      if (args.simulate) {
+        try {
+          const { walkPrototype } = await import('@protoscan/simulator');
+          const graph = buildGraph(file, {
+            pageIds: pageIds.length ? pageIds : undefined,
+          });
+          console.error('[protoscan] Running simulator (this may take several minutes)...');
+          const walkResult = await walkPrototype(graph, { fileKey, maxScreens: 30 });
+          simulatorIssues = walkResult.issues;
+          videoPath = walkResult.videoPath;
+          console.error(`[protoscan] Simulator: ${simulatorIssues.length} runtime issue(s)`);
+        } catch (simError) {
+          const msg = simError instanceof Error ? simError.message : String(simError);
+          console.error(`[protoscan] Simulator error: ${msg}`);
+          // Continue with static analysis even if simulator fails
+        }
+      }
+
       const result = await scan(file, {
         fileKey,
         minTouchTarget: args.min_touch_target,
         skip: args.skip,
         pageIds: pageIds.length ? pageIds : undefined,
+        additionalIssues: simulatorIssues.length ? simulatorIssues : undefined,
       });
 
       // Update the HTML report for the MCP Apps UI resource
