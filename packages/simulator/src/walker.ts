@@ -48,7 +48,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Dismiss Figma cookie/hardware banners by clicking buttons and hiding overlays */
+/** Dismiss Figma cookie/hardware banners by clicking buttons and hiding overlays.
+ *  Hides fixed/absolute positioned elements that are NOT inside the prototype canvas. */
 async function dismissBanners(page: { evaluate: (fn: string) => Promise<unknown> }): Promise<void> {
   await page.evaluate(`
     (() => {
@@ -57,7 +58,9 @@ async function dismissBanners(page: { evaluate: (fn: string) => Promise<unknown>
         if (t.includes('allow') || t.includes('accept') || t.includes('got it')
             || t.includes('do not allow') || t.includes('dismiss')) btn.click();
       });
+      const viewer = document.getElementById('viewerContainer');
       document.querySelectorAll('div').forEach(div => {
+        if (viewer && viewer.contains(div)) return;
         const s = window.getComputedStyle(div);
         const r = div.getBoundingClientRect();
         if ((s.position === 'fixed' || s.position === 'absolute') && r.bottom > window.innerHeight - 100 && r.height < 200 && r.height > 20) {
@@ -107,7 +110,12 @@ export async function walkPrototype(
     const session = JSON.parse(readFileSync(sessionPath, 'utf-8')) as {
       cookies: Array<{ name: string; value: string; [k: string]: unknown }>;
     };
-    await context.addCookies(session.cookies.map(c => ({
+    // Only inject cookies with Figma-related domains
+    const figmaCookies = session.cookies.filter(c => {
+      const domain = (c.domain as string) ?? '';
+      return domain.endsWith('.figma.com') || domain === 'figma.com' || domain === '';
+    });
+    await context.addCookies(figmaCookies.map(c => ({
       name: c.name, value: c.value, domain: c.domain as string | undefined,
       path: c.path as string | undefined, httpOnly: c.httpOnly as boolean | undefined,
       secure: true, sameSite: 'None' as const,
@@ -156,8 +164,13 @@ export async function walkPrototype(
     return { issues };
   }
 
-  // Wait for prototype to fully initialize (canvas renders before JS handlers attach)
-  await sleep(15_000);
+  // Wait for prototype to fully initialize — canvas renders before JS handlers attach.
+  // Hybrid: wait for network idle first, then ensure minimum 12s total from page load.
+  // On fast connections this saves ~3s vs flat 15s. On slow, networkidle adds needed time.
+  const loadStart = Date.now();
+  await page.waitForLoadState('networkidle').catch(() => {});
+  const remaining = Math.max(12_000 - (Date.now() - loadStart), 3_000);
+  await sleep(remaining);
 
   // Offset + scale detection (lazy — runs after first real screen loads)
   let offset = { x: 0, y: 0 };
@@ -172,12 +185,16 @@ export async function walkPrototype(
     await sleep(500);
     await dismissBanners(page as any);
 
-    // Try to detect offset from screenshot
+    // Detect offset using screenshot with high-contrast edge detection.
+    // The prototype viewer may have a device frame (bezel) that confuses simple brightness.
+    // We use derivative-based detection: find the first column with a SHARP brightness jump.
     for (let attempt = 0; attempt < 5; attempt++) {
       const detected = await detectOffset(page);
       const contentW = VP_W - 2 * detected.x;
-      // Valid if content fills > 60% of viewport width (not a tiny loader)
-      if (contentW > VP_W * 0.6) {
+      // Valid: content fills > 60% of viewport and offset is reasonable
+      // (for a phone-sized frame in phone viewport, offset should be >= ~10px)
+      const minOffset = Math.max(Math.floor((VP_W - frameW) / 2) - 5, 0);
+      if (contentW > VP_W * 0.6 && detected.x >= minOffset) {
         offset = detected;
         scale = contentW / frameW;
         offsetDetected = true;
@@ -187,14 +204,32 @@ export async function walkPrototype(
         }
         return;
       }
+      // If detected offset is too small (bezel detected as content), use theoretical center
+      if (detected.x < minOffset && contentW > VP_W * 0.6) {
+        const theoreticalOx = Math.round((VP_W - frameW) / 2);
+        const theoreticalOy = detected.y > 10 ? detected.y : Math.round((VP_H - frameH) / 2);
+        offset = { x: theoreticalOx, y: theoreticalOy };
+        scale = frameW > 0 ? (VP_W - 2 * theoreticalOx) / frameW : 1;
+        offsetDetected = true;
+        console.log(`[walker] Offset: (${offset.x}, ${offset.y}), scale: ${scale.toFixed(3)} (theoretical — device frame detected)`);
+        if (recordDir) {
+          await page.screenshot({ path: resolve(recordDir, 'debug-offset.png') });
+        }
+        return;
+      }
       await sleep(2000);
     }
 
-    // Fallback: assume edge-to-edge (min-zoom fills viewport width)
-    offset = { x: 0, y: 0 };
-    scale = VP_W / frameW;
+    // Fallback: use theoretical centered offset
+    const theoreticalOx = Math.round((VP_W - frameW) / 2);
+    const theoreticalOy = Math.round((VP_H - frameH) / 2);
+    offset = { x: theoreticalOx, y: theoreticalOy };
+    scale = frameW > 0 ? (VP_W - 2 * theoreticalOx) / frameW : 1;
     offsetDetected = true;
-    console.log(`[walker] Offset fallback: scale ${scale.toFixed(3)}`);
+    console.log(`[walker] ⚠ Offset detection failed after 10s — using theoretical (${offset.x}, ${offset.y}), scale ${scale.toFixed(3)}`);
+    if (recordDir) {
+      await page.screenshot({ path: resolve(recordDir, 'debug-offset-fallback.png') });
+    }
   }
 
   console.log('[walker] Navigating by clicks (no reloads)...');
@@ -444,8 +479,17 @@ export async function walkPrototype(
     videoPath = await addClickIndicators(videoPath, clickEvents);
   }
 
+  // Count cross-page edges that were skipped
+  let crossPageCount = 0;
+  for (const [screenId, edges] of graph.edges) {
+    for (const e of edges) {
+      if (e.navigation === 'NAVIGATE' && !graph.nodes.has(e.destinationId)) crossPageCount++;
+    }
+  }
+
   console.log(`\n[walker] Visited ${screensVisited} screens (0 reloads).`);
   console.log(`[walker] Found ${issues.length} runtime nav failures.`);
+  if (crossPageCount > 0) console.log(`[walker] Skipped ${crossPageCount} cross-page edges (destinations outside scanned page).`);
   if (videoPath) console.log(`[walker] Recording: ${videoPath}`);
   return { issues, videoPath };
 }
@@ -456,12 +500,14 @@ async function addClickIndicators(
   inputPath: string,
   clicks: Array<{ x: number; y: number; t: number }>,
 ): Promise<string> {
-  const { execFileSync } = await import('node:child_process');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
   const { dirname, join } = await import('node:path');
+  const execFileAsync = promisify(execFile);
 
   // Check ffmpeg is available
   try {
-    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    await execFileAsync('ffmpeg', ['-version'], { timeout: 5_000 });
   } catch {
     console.log('[walker] ffmpeg not found — skipping click indicators');
     return inputPath;
@@ -475,7 +521,6 @@ async function addClickIndicators(
   generateCirclePng(circlePath, circleSize);
 
   // Build filter chain: overlay the circle PNG at each click position with timing
-  // Each click shows for 0.4s with a fade-out effect
   const dur = 0.4;
   const r = circleSize / 2;
   let filter = `[0:v]null[base]`;
@@ -493,14 +538,14 @@ async function addClickIndicators(
   console.log(`[walker] Adding touch indicators to video (${clicks.length} taps)...`);
 
   try {
-    execFileSync('ffmpeg', [
+    await execFileAsync('ffmpeg', [
       '-i', inputPath,
       '-i', circlePath,
       '-filter_complex', filter,
       '-map', '[out]',
       '-c:v', 'libvpx-vp9', '-crf', '30', '-b:v', '0',
       outPath, '-y',
-    ], { stdio: 'pipe', timeout: 300_000 });
+    ], { timeout: 300_000 });
     console.log(`[walker] Final video: ${outPath}`);
     try { unlinkSync(circlePath); } catch { /* ignore */ }
     return outPath;
@@ -515,12 +560,12 @@ async function addClickIndicators(
       return `drawtext=text='●':fontsize=40:fontcolor=white@0.55:x=${x - 14}:y=${y - 20}:${en}`;
     }).join(',');
     try {
-      execFileSync('ffmpeg', [
+      await execFileAsync('ffmpeg', [
         '-i', inputPath,
         '-vf', fallbackFilter,
         '-c:v', 'libvpx-vp9', '-crf', '30', '-b:v', '0',
         outPath, '-y',
-      ], { stdio: 'pipe', timeout: 300_000 });
+      ], { timeout: 300_000 });
       return outPath;
     } catch {
       return inputPath;

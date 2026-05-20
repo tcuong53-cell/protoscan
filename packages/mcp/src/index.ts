@@ -11,12 +11,16 @@ import {
 } from '@modelcontextprotocol/ext-apps/server';
 
 function parseFigmaInput(input: string): { fileKey: string; pageIds: string[] } {
-  const urlMatch = input.match(/figma\.com\/(?:design|file)\/([a-zA-Z0-9]+)/);
+  const urlMatch = input.match(/figma\.com\/(?:design|file|proto)\/([a-zA-Z0-9]+)/);
   if (urlMatch) {
     const fileKey = urlMatch[1];
     const nodeMatch = input.match(/node-id=([0-9]+-[0-9]+)/);
     const pageIds = nodeMatch ? [nodeMatch[1].replace('-', ':')] : [];
     return { fileKey, pageIds };
+  }
+  // Bare file key — validate format
+  if (!/^[a-zA-Z0-9]+$/.test(input)) {
+    throw new Error(`Invalid Figma file key: "${input}". Expected alphanumeric key or full Figma URL.`);
   }
   return { fileKey: input, pageIds: [] };
 }
@@ -123,9 +127,14 @@ registerAppTool(
         ? formatJson(result)
         : formatTerminal(result);
 
-      return {
-        content: [{ type: 'text' as const, text: output }],
-      };
+      const content: Array<{ type: 'text'; text: string }> = [
+        { type: 'text' as const, text: output },
+      ];
+      if (videoPath) {
+        content.push({ type: 'text' as const, text: `\n🎥 Video walkthrough saved: ${videoPath}` });
+      }
+
+      return { content };
     } catch (error) {
       const message = error instanceof FigmaApiError
         ? error.message
